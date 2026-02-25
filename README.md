@@ -18,6 +18,7 @@ CondNet-CR consists of:
 
 ## Project Structure
 
+```
 CondNet-CR/
 ├── configs/
 ├── datasets/
@@ -27,6 +28,7 @@ CondNet-CR/
 ├── checkpoints/         # (ignored by git)
 ├── logs/                # (ignored by git)
 └── main.py
+```
 
 ---
 
