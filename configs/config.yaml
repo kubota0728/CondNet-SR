@@ -1,0 +1,55 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Wed Feb 25 16:19:04 2026
+
+@author: kubota
+"""
+
+run:
+  exp_name: exp01
+  mode: train          # train / eval / predict / test
+  load_pth: "checkpoints/exp01/best.pth"
+  data_parallel: true
+  force_cpu: false
+
+output:
+  logs_root: logs
+  ckpt_root: checkpoints
+
+data:
+  train_csv: "D:/kubota/Data/model3Data/filepath/conductor_train0927_df_45.csv"
+  val_csv:   "D:/kubota/Data/model3Data/filepath/val0927_df.csv"
+  test_csv:  "D:/kubota/Data/model3Data/filepath/test0924_df.csv"
+
+  image_size: 256
+  batch_size: 32
+  val_batch_size: 32
+  test_batch_size: 1
+
+  shuffle_train: true
+  shuffle_val: false
+
+model:
+  num_classes: 10
+  transformer_count: 6
+  pretrained_unet_path: "D:/kubota/Data/Model3test/result_Unet_ver1.1.8.2_test/train_28.pth"
+  freeze: ["TCB1", "TCB2", "TCB3", "TCB4", "TCB5", "Trans"]
+
+train:
+  epochs: 50
+  lr: 0.001
+  optimizer: adam
+  weight_decay: 0.0
+  num_workers: 0
+  amp: false
+  detect_anomaly: true
+  keep_frozen_transformer_eval: true
+  save_every: 1
+  log_every: 0
+
+val:
+  num_workers: 0
+
+eval:
+  save_predictions: false
+  pred_dir: null
