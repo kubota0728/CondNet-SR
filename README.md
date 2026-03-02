@@ -39,7 +39,7 @@ The segmentation backbone must be pretrained before running CondNet-CR.
 
 Pretraining scripts are provided in:
 
-pretrain_seg/
+tools/
 
 After pretraining, specify the backbone weights in:
 
