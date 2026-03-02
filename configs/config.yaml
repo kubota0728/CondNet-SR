@@ -1,14 +1,8 @@
 # -*- coding: utf-8 -*-
-"""
-Created on Wed Feb 25 16:19:04 2026
-
-@author: kubota
-"""
 
 run:
   exp_name: exp01
   mode: train          # train / eval / predict / test
-  load_pth: "checkpoints/exp01/best.pth"
   data_parallel: true
   force_cpu: false
 
@@ -17,9 +11,9 @@ output:
   ckpt_root: checkpoints
 
 data:
-  train_csv: "D:/kubota/Data/model3Data/filepath/conductor_train0927_df_45.csv"
-  val_csv:   "D:/kubota/Data/model3Data/filepath/val0927_df.csv"
-  test_csv:  "D:/kubota/Data/model3Data/filepath/test0924_df.csv"
+  train_csv: "D:/kubota/Data/Model10test/filepath/train_df_20260226.csv"
+  val_csv:   "D:/kubota/Data/model10test/filepath/val_df_20260226.csv"
+  test_csv:  "D:/kubota/Data/model10test/filepath/test_df_20260226.csv"
 
   image_size: 256
   batch_size: 32
@@ -30,14 +24,17 @@ data:
   shuffle_val: false
 
 model:
-  num_classes: 10
+  num_classes: 15 #0~14ならば15
   transformer_count: 6
-  pretrained_unet_path: "D:/kubota/Data/Model3test/result_Unet_ver1.1.8.2_test/train_28.pth"
-  freeze: ["TCB1", "TCB2", "TCB3", "TCB4", "TCB5", "Trans"]
+  pretrained_unet_path: "D:/kubota/Data/Model10test/seg_result_20260227/best.pth"
+  freeze_keywords: ["TCB1", "TCB2", "TCB3", "TCB4", "TCB5", "Trans"]
+  multi_model: true #別々のモデルとして持つか。trueの場合別々、falseの場合一つ
 
 train:
   epochs: 50
-  lr: 0.001
+  train_original: true #originalを学習するかどうか。trueなら学習
+  lr_original: 1.0e-4
+  lr_ctnet: 1.0e-3
   optimizer: adam
   weight_decay: 0.0
   num_workers: 0
@@ -51,5 +48,9 @@ val:
   num_workers: 0
 
 eval:
+  load_pth: "checkpoints/exp01/best.pth"
   save_predictions: false
   pred_dir: null
+  
+loss:
+  name: mae

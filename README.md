@@ -24,7 +24,8 @@ CondNet-CR/
 ├── datasets/
 ├── engine/
 ├── model/
-├── pretrain_seg/        # Segmentation pretraining scripts
+├── tools/        # Segmentation pretraining scripts, other scripts
+├── utils/
 ├── checkpoints/         # (ignored by git)
 ├── logs/                # (ignored by git)
 └── main.py

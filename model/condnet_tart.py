@@ -87,7 +87,7 @@ class UNet_2D(nn.Module):
     """
     def __init__(self, num_classes=10, transformer_count=6):
         super().__init__()
-        self.TCB1 = TwoConvBlock(2, 32, 32)
+        self.TCB1 = TwoConvBlock(3, 32, 32)
         self.TCB2 = TwoConvBlock(32, 64, 64)
         self.TCB3 = TwoConvBlock(64, 128, 128)
         self.TCB4 = TwoConvBlock(128, 256, 256)
@@ -113,8 +113,8 @@ class UNet_2D(nn.Module):
             [TransformerBlock(embed_size=512, heads=4) for _ in range(transformer_count)]
         )
 
-    def forward(self, a, b):
-        x = torch.cat([a, b], dim=1)  # [B,2,H,W]
+    def forward(self, a, b, mask):
+        x = torch.cat([a, b, mask], dim=1)  # [B,2,H,W]
         x = self.TCB1(x)
         x1 = x
         x = self.maxpool(x)

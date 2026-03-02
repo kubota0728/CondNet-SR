@@ -36,6 +36,7 @@ def _prepare_output_dirs(cfg):
     cfg.setdefault("output", {})
     cfg["output"]["logs_dir"] = logs_dir
     cfg["output"]["ckpt_dir"] = ckpt_dir
+    cfg.setdefault("run", {})
     cfg["run"]["exp_name"] = exp_name
 
     return logs_dir, ckpt_dir
@@ -48,19 +49,21 @@ def _make_loader(df, cfg, mode: str):
 
     image_size = int(data_cfg.get("image_size", 256))
     batch_size = int(data_cfg.get("batch_size", 32))
+    val_batch_size = int(data_cfg.get("val_batch_size", batch_size))
+    test_batch_size = int(data_cfg.get("test_batch_size", 1))
 
     if mode == "train":
-        shuffle = True
+        shuffle = bool(data_cfg.get("shuffle_train", True))
         num_workers = int(train_cfg.get("num_workers", 0))
         bs = batch_size
     elif mode == "val":
+        shuffle = bool(data_cfg.get("shuffle_val", False))
+        num_workers = int(val_cfg.get("num_workers", 0))
+        bs = val_batch_size
+    elif mode in ("eval", "test", "predict"):
         shuffle = False
         num_workers = int(val_cfg.get("num_workers", 0))
-        bs = batch_size
-    elif mode == "test":
-        shuffle = False
-        num_workers = int(val_cfg.get("num_workers", 0))
-        bs = 1
+        bs = test_batch_size
     else:
         raise ValueError(f"Unknown loader mode: {mode}")
 
@@ -73,6 +76,51 @@ def _make_loader(df, cfg, mode: str):
         pin_memory=True,
     )
     return loader
+
+
+def _resolve_ckpt_path_for_mode(cfg, mode: str) -> str:
+    """
+    eval系: eval.load_pth 優先、無ければ run.load_pth
+    train系: run.load_pth（resume用）
+    """
+    run_cfg = cfg.get("run", {})
+    eval_cfg = cfg.get("eval", {})
+
+    if mode in ("eval", "test", "predict"):
+        p = str(eval_cfg.get("load_pth", "")).strip()
+        if p:
+            return p
+        return str(run_cfg.get("load_pth", "")).strip()
+
+    # train resume
+    return str(run_cfg.get("load_pth", "")).strip()
+
+
+def _load_checkpoint_into_model(model, ckpt_path: str, device, logger, strict: bool = True):
+    if not ckpt_path:
+        raise ValueError("Checkpoint path is empty.")
+    if not os.path.isfile(ckpt_path):
+        raise FileNotFoundError(f"Specified pth not found: {ckpt_path}")
+
+    logger.info(f"Loading checkpoint: {ckpt_path}")
+    ckpt = torch.load(ckpt_path, map_location=device)
+    state = ckpt["model"] if (isinstance(ckpt, dict) and "model" in ckpt) else ckpt
+
+    def _load_one(m, sd):
+        if isinstance(m, torch.nn.DataParallel):
+            m.module.load_state_dict(sd, strict=strict)
+        else:
+            m.load_state_dict(sd, strict=strict)
+
+    if isinstance(model, dict):
+        if not (isinstance(state, dict) and "original" in state and "ctnet" in state):
+            raise ValueError("Checkpoint format mismatch: expected model={'original':..., 'ctnet':...}")
+        _load_one(model["original"], state["original"])
+        _load_one(model["ctnet"], state["ctnet"])
+    else:
+        _load_one(model, state)
+
+    logger.info("Model weights loaded successfully.")
 
 
 def main():
@@ -92,7 +140,7 @@ def main():
     logger.info(f"ckpt_dir: {ckpt_dir}")
 
     try:
-        mode = cfg.get("run", {}).get("mode", "train")
+        mode = str(cfg.get("run", {}).get("mode", "train")).lower()
 
         data_cfg = cfg.get("data", {})
         train_csv = data_cfg.get("train_csv", None)
@@ -103,9 +151,12 @@ def main():
         val_df = pd.read_csv(val_csv) if val_csv else None
         test_df = pd.read_csv(test_csv) if test_csv else None
 
-        # =========================
-        # TRAIN MODE
-        # =========================
+        # まずモデル構築（train/eval共通）
+        model, device, optimizer = build(cfg, logger=logger)
+
+        # -------------------------
+        # TRAIN
+        # -------------------------
         if mode == "train":
             if train_df is None or val_df is None:
                 raise ValueError("For train mode, train_csv and val_csv are required.")
@@ -116,24 +167,10 @@ def main():
             train_loader = _make_loader(train_df, cfg, mode="train")
             val_loader = _make_loader(val_df, cfg, mode="val")
 
-            model, device, optimizer = build(cfg, logger=logger)
-
-            # 🔥 ここで load_pth が指定されていれば読み込む（resume用）
-            load_pth = cfg.get("run", {}).get("load_pth", None)
-            if load_pth:
-                if not os.path.isfile(load_pth):
-                    raise FileNotFoundError(f"Specified pth not found: {load_pth}")
-
-                logger.info(f"Loading model weights from: {load_pth}")
-                ckpt = torch.load(load_pth, map_location=device)
-                state_dict = ckpt["model"] if (isinstance(ckpt, dict) and "model" in ckpt) else ckpt
-
-                if isinstance(model, torch.nn.DataParallel):
-                    model.module.load_state_dict(state_dict, strict=True)
-                else:
-                    model.load_state_dict(state_dict, strict=True)
-
-                logger.info("Model weights loaded successfully.")
+            # resume が必要ならロード（run.load_pth）
+            ckpt_path = _resolve_ckpt_path_for_mode(cfg, mode="train")
+            if ckpt_path:
+                _load_checkpoint_into_model(model, ckpt_path, device, logger, strict=True)
 
             trainer = Trainer(
                 cfg=cfg,
@@ -143,40 +180,23 @@ def main():
                 logger=logger,
                 ckpt_dir=ckpt_dir,
             )
-
             trainer.fit(train_loader, val_loader)
 
-        # =========================
-        # EVAL / TEST MODE
-        # =========================
-        elif mode in ("eval", "predict", "test"):
+        # -------------------------
+        # EVAL / TEST / PREDICT
+        # -------------------------
+        elif mode in ("eval", "test", "predict"):
             eval_df = test_df if test_df is not None else val_df
             if eval_df is None:
-                raise ValueError("For eval mode, test_csv or val_csv must be specified.")
+                raise ValueError("For eval/test/predict mode, test_csv or val_csv must be specified.")
 
             logger.info(f"Eval df: {len(eval_df)} rows")
-            eval_loader = _make_loader(eval_df, cfg, mode="test")
+            eval_loader = _make_loader(eval_df, cfg, mode=mode)
 
-            model, device, optimizer = build(cfg, logger=logger)
-
-            # 🔥 ここが一番重要：指定pthを必ず読む
-            load_pth = cfg.get("run", {}).get("load_pth", None)
-            if not load_pth:
-                raise ValueError("In eval mode, run.load_pth must be specified.")
-
-            if not os.path.isfile(load_pth):
-                raise FileNotFoundError(f"Specified pth not found: {load_pth}")
-
-            logger.info(f"Loading model weights from: {load_pth}")
-            ckpt = torch.load(load_pth, map_location=device)
-            state_dict = ckpt["model"] if (isinstance(ckpt, dict) and "model" in ckpt) else ckpt
-
-            if isinstance(model, torch.nn.DataParallel):
-                model.module.load_state_dict(state_dict, strict=True)
-            else:
-                model.load_state_dict(state_dict, strict=True)
-
-            logger.info("Model weights loaded successfully.")
+            ckpt_path = _resolve_ckpt_path_for_mode(cfg, mode=mode)
+            if not ckpt_path:
+                raise ValueError("For eval/test/predict, set eval.load_pth (or run.load_pth).")
+            _load_checkpoint_into_model(model, ckpt_path, device, logger, strict=True)
 
             trainer = Trainer(
                 cfg=cfg,
