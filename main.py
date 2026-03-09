@@ -25,27 +25,17 @@ warnings.filterwarnings(
     module="torch.cuda.nccl"
 )
 
-def _prepare_output_dirs(cfg):
-    run_cfg = cfg.get("run", {})
-    exp_name = run_cfg.get("exp_name", "exp01")
-
+def _prepare_output_dirs(cfg, timestamp: str):
     out_cfg = cfg.get("output", {})
-    logs_root = out_cfg.get("logs_root", "logs")
     ckpt_root = out_cfg.get("ckpt_root", "checkpoints")
 
-    logs_dir = os.path.join(logs_root, exp_name)
-    ckpt_dir = os.path.join(ckpt_root, exp_name)
-
-    os.makedirs(logs_dir, exist_ok=True)
+    ckpt_dir = os.path.join(ckpt_root, timestamp)
     os.makedirs(ckpt_dir, exist_ok=True)
 
     cfg.setdefault("output", {})
-    cfg["output"]["logs_dir"] = logs_dir
     cfg["output"]["ckpt_dir"] = ckpt_dir
-    cfg.setdefault("run", {})
-    cfg["run"]["exp_name"] = exp_name
 
-    return logs_dir, ckpt_dir
+    return ckpt_dir
 
 
 def _make_loader(df, cfg, mode: str):
@@ -136,14 +126,17 @@ def main():
 
     with open(args.config, "r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
-
-    logs_dir, ckpt_dir = _prepare_output_dirs(cfg)
-
-    logger = setup_logger(logs_dir=logs_dir, enable_print_redirect=False)
+    
+    logger, log_file, timestamp = setup_logger(logs_root="logs", enable_print_redirect=False)
+    ckpt_dir = _prepare_output_dirs(cfg, timestamp)
+    
     logger.info("===== Program Started =====")
     logger.info(f"config: {args.config}")
-    logger.info(f"logs_dir: {logs_dir}")
+    logger.info(f"log_file: {log_file}")
     logger.info(f"ckpt_dir: {ckpt_dir}")
+    
+    logger.info("===== Config =====")
+    logger.info("\n" + yaml.dump(cfg, sort_keys=False, allow_unicode=True))
 
     try:
         mode = str(cfg.get("run", {}).get("mode", "train")).lower()

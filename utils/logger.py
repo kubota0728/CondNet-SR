@@ -6,26 +6,30 @@ Created on Mon Mar  2 12:26:17 2026
 """
 
 # utils/logger.py
+
 import logging
 import os
 import sys
+from datetime import datetime
 
 
-def setup_logger(logs_dir, enable_print_redirect=False):
-    os.makedirs(logs_dir, exist_ok=True)
+def setup_logger(logs_root="logs", enable_print_redirect=False):
+    os.makedirs(logs_root, exist_ok=True)
 
-    log_file = os.path.join(logs_dir, "log.txt")
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = os.path.join(logs_root, f"{timestamp}.log")
 
     logger = logging.getLogger("CondNet")
     logger.setLevel(logging.INFO)
-    logger.handlers = []
+    logger.handlers.clear()
+    logger.propagate = False
 
     formatter = logging.Formatter(
         "%(asctime)s - %(levelname)s - %(message)s"
     )
 
     # file handler
-    fh = logging.FileHandler(log_file)
+    fh = logging.FileHandler(log_file, encoding="utf-8")
     fh.setFormatter(formatter)
     logger.addHandler(fh)
 
@@ -34,7 +38,7 @@ def setup_logger(logs_dir, enable_print_redirect=False):
     ch.setFormatter(formatter)
     logger.addHandler(ch)
 
-    return logger
+    return logger, log_file, timestamp
 
 
 def close_logger(logger):
