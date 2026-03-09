@@ -27,6 +27,8 @@ class CondDataset(TorchDataset):
         col_img2: str = "t2_img",
         col_label: str = "label",
         col_mask: str = "t2mask",
+        col_id: str = "IXI_ID",
+        col_slice: str = "slice",
     ):
         self.df = df.reset_index(drop=True)
         self.image_size = int(image_size)
@@ -35,6 +37,12 @@ class CondDataset(TorchDataset):
         self.img2path_list = self.df[col_img2].values
         self.labelpath_list = self.df[col_label].values
         self.t2mask_list    = self.df[col_mask].values
+        
+        # 追加：集約キー
+        if col_id not in self.df.columns:
+            raise KeyError(f"dfに {col_id} 列がありません")
+        self.id_list = self.df[col_id].astype(str).values
+        self.slice_list = self.df[col_slice].astype(int).values
 
         self.augmentation = bool(augmentation)
         self.contrast_range = contrast_range
@@ -134,12 +142,16 @@ class CondDataset(TorchDataset):
         img2_t = torch.from_numpy((img2 / 255.0).astype(np.float32)).unsqueeze(0)  # (1,H,W)
         mask_t = torch.from_numpy(mask.astype(np.float32)).unsqueeze(0)            # (1,H,W)
         cond_t = torch.from_numpy(cond).unsqueeze(0)                               # (1,H,W)
+        lab14_t = torch.from_numpy(lab14.astype(np.int64))  # (H,W) int64
 
         return {
             "img1": img1_t,
             "img2": img2_t,
             "mask": mask_t,
             "label": cond_t,   # ←学習側が "label" 前提ならこのまま。嫌なら "cond" に変更。
+            "lab14": lab14_t,     # 1〜14評価用マスク
+            "ixi_id": self.id_list[index],
+            "slice": int(self.slice_list[index]),
         }
 
     def __len__(self):

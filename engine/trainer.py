@@ -18,6 +18,12 @@ import torch.nn as nn
 
 from losses import build_loss
 
+import nibabel as nib
+import numpy as np
+import matplotlib.pyplot as plt
+import math
+
+from collections import Counter
 
 @dataclass
 class EpochResult:
@@ -70,7 +76,7 @@ class Trainer:
             torch.autograd.set_detect_anomaly(True)
 
         self.use_amp = bool(train_cfg.get("amp", False))
-        self.scaler = torch.cuda.amp.GradScaler(enabled=self.use_amp)
+        self.scaler = torch.amp.GradScaler(enabled=self.use_amp)
 
         self.log_every = int(train_cfg.get("log_every", 0))  # 0 means auto
 
@@ -352,7 +358,7 @@ class Trainer:
 
         for i, batch in enumerate(train_loader, start=1):
             batch = self._to_device(batch)
-            self._require_keys(batch, ["img1", "img2", "label", "mask"])
+            self._require_keys(batch, ["img1", "img2", "label", "mask", "lab14"])
 
             img1 = batch["img1"]
             img2 = batch["img2"]
@@ -398,7 +404,7 @@ class Trainer:
 
         for batch in val_loader:
             batch = self._to_device(batch)
-            self._require_keys(batch, ["img1", "img2", "label", "mask"])
+            self._require_keys(batch, ["img1", "img2", "label", "mask", "lab14"])
 
             img1 = batch["img1"]
             img2 = batch["img2"]
@@ -416,88 +422,234 @@ class Trainer:
         self.history["val_loss"].append(epoch_loss)
         return EpochResult(loss=epoch_loss, seconds=sec)
 
+    def _save_pred_nii_3d(self, pred_3d_zhw: np.ndarray, save_path: str):
+        """
+        pred_3d_zhw: (Z, H, W) float32
+        niiは(H, W, Z)として保存（一般的な見た目のため）
+        """
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        vol_hwz = np.transpose(pred_3d_zhw, (1, 2, 0)).astype(np.float32)  # (H,W,Z)
+        affine = np.eye(4, dtype=np.float32)
+        nib.save(nib.Nifti1Image(vol_hwz, affine), save_path)
+    
+    def _show_mid_slice(self, t1_zhw, t2_zhw, gt_zhw, pred_zhw, pid: str):
+
+        z = int(pred_zhw.shape[0] // 2)
+    
+        fig, axes = plt.subplots(2, 2, figsize=(8, 8))
+    
+        axes[0,0].imshow(t1_zhw[z], cmap="gray", interpolation="nearest")
+        axes[0,0].set_title("T1", fontsize=16)
+    
+        axes[0,1].imshow(t2_zhw[z], cmap="gray", interpolation="nearest")
+        axes[0,1].set_title("T2", fontsize=16)
+    
+        axes[1,0].imshow(gt_zhw[z],
+                         cmap="jet",
+                         vmin=0.0,
+                         vmax=2.2,
+                         interpolation="nearest")
+        axes[1,0].set_title("GT", fontsize=16)
+    
+        axes[1,1].imshow(pred_zhw[z],
+                         cmap="jet",
+                         vmin=0.0,
+                         vmax=2.2,
+                         interpolation="nearest")
+        axes[1,1].set_title("Pred", fontsize=16)
+    
+        for ax in axes.ravel():
+            ax.axis("off")
+    
+        fig.suptitle(f"{pid} (z={z})", fontsize=18)
+    
+        plt.tight_layout()
+        plt.show()
+    
+    def _compute_metrics_case(self, pred_zhw, gt_zhw, lab14_zhw):
+        """
+        pred/gt: (Z,H,W) float
+        lab14: (Z,H,W) int 0..14
+        指標は表示用にdictで返す
+        """
+        out = {}
+    
+        m_all = (lab14_zhw >= 1) & (lab14_zhw <= 14)
+        out["MAE_all"] = float(np.mean(np.abs(pred_zhw[m_all] - gt_zhw[m_all]))) if m_all.any() else float("nan")
+    
+        for r in range(1, 15):
+            m = (lab14_zhw == r)
+            if not m.any():
+                continue
+            pv = pred_zhw[m]
+            gv = gt_zhw[m]
+            out[f"Label{r:02d}_MAE"] = float(np.mean(np.abs(pv - gv)))
+            out[f"Label{r:02d}_mean"] = float(np.mean(pv))
+            out[f"Label{r:02d}_std"]  = float(np.std(pv, ddof=0))
+        return out
+        
+
     @torch.no_grad()
-    def eval(self, loader, save_predictions: bool = False, pred_dir: Optional[str] = None) -> Dict[str, Any]:
+    def eval(self, loader, save_predictions=False, pred_dir=None):
+
+        SCALE_BACK = 2.0 / 0.9
+    
         self._set_eval_mode()
         self._maybe_fix_frozen_transformers()
-
+    
         if save_predictions:
             if pred_dir is None:
-                pred_dir = os.path.join(self.ckpt_dir, "predictions")
+                pred_dir = os.path.join(self.ckpt_dir, "predictions_nii")
             os.makedirs(pred_dir, exist_ok=True)
-
-        has_label = True
-        running = 0.0
-        n_batches = 0
-        saved = 0
-
+    
+        # buffers[pid] = list of (slice, t1, t2, gt, pred, lab14)
+        buffers = {}
+    
         for idx, batch in enumerate(loader):
             batch = self._to_device(batch)
-            self._require_keys(batch, ["img1", "img2", "mask"])
-
+            self._require_keys(batch, ["img1", "img2", "mask", "label", "lab14", "ixi_id", "slice"])
+    
             img1 = batch["img1"]
             img2 = batch["img2"]
             mask = batch["mask"]
-            label = batch.get("label", None)
-
-            pred, out_old = self._forward(img1, img2, mask)
-
-            if label is None:
-                has_label = False
+            gt   = batch["label"]   # (B,1,H,W)
+            lab14 = batch["lab14"]  # (B,H,W)
+            ixi_ids = batch["ixi_id"]
+            slices  = batch["slice"]
+    
+            pred, _ = self._forward(img1, img2, mask)  # (B,1,H,W)
+    
+            B = int(pred.shape[0])
+    
+            # ixi_ids, slices を list 化（collate対策）
+            if not isinstance(ixi_ids, (list, tuple)):
+                ixi_ids = list(ixi_ids)
+            if not isinstance(slices, (list, tuple)):
+                slices = list(slices)
+    
+            for i in range(B):
+                pid = str(ixi_ids[i])
+                s   = int(slices[i])
+    
+                t1_2d = img1[i, 0].detach().cpu().numpy()
+                t2_2d = img2[i, 0].detach().cpu().numpy()
+    
+                # ★導電率スケール復元（pred/gtともに）
+                gt_2d = gt[i, 0].detach().cpu().numpy().astype(np.float32) * SCALE_BACK
+                pr_2d = pred[i, 0].detach().cpu().numpy().astype(np.float32) * SCALE_BACK
+    
+                lb_2d = lab14[i].detach().cpu().numpy().astype(np.int16)
+    
+                buffers.setdefault(pid, []).append((s, t1_2d, t2_2d, gt_2d, pr_2d, lb_2d))
+    
+        # ===== 全症例集約用（ラベル別 mean/std/MAE、全体MAE） =====
+        global_acc = {r: {"n": 0, "sum": 0.0, "sumsq": 0.0, "abs_err": 0.0} for r in range(1, 15)}
+        global_all = {"n": 0, "abs_err": 0.0}
+    
+        # ★IDごとに処理
+        for pid, items in buffers.items():
+            items.sort(key=lambda x: x[0])  # slice順に並べる
+            n_slices = len(items)
+            self._log(f"[eval] IXI_ID={pid} | slices={n_slices}")
+    
+            # stackして3D化: (Z,H,W)
+            t1_zhw = np.stack([x[1] for x in items], axis=0).astype(np.float32)
+            t2_zhw = np.stack([x[2] for x in items], axis=0).astype(np.float32)
+            gt_zhw = np.stack([x[3] for x in items], axis=0).astype(np.float32)
+            pr_zhw = np.stack([x[4] for x in items], axis=0).astype(np.float32)
+            lb_zhw = np.stack([x[5] for x in items], axis=0).astype(np.int16)
+    
+            # ---- 症例ごとのログは必要最小限（細かい出力はしない） ----
+            m_all = (lb_zhw >= 1) & (lb_zhw <= 14)
+            if m_all.any():
+                mae_case_all = float(np.mean(np.abs(pr_zhw[m_all] - gt_zhw[m_all])))
+                self._log(f"  MAE_all={mae_case_all:.5f}")
             else:
-                loss = self._compute_loss(pred, label, batch)
-                running += float(loss.item())
-                n_batches += 1
-
+                self._log("  MAE_all=nan")
+    
+            # ---- z//2の断面を表示（保存しない） ----
+            self._show_mid_slice(t1_zhw, t2_zhw, gt_zhw, pr_zhw, pid)
+    
+            # ---- predのみnii保存（症例1ファイル） ----
             if save_predictions:
-                if out_old is not None:
-                    p = {
-                        "original": self._cpu_clone_outputs(out_old),  # dict対応
-                        "ctnet": pred.detach().cpu(),
-                    }
-                    torch.save(p, os.path.join(pred_dir, f"pred_{idx:06d}.pt"))
-                else:
-                    torch.save(pred.detach().cpu(), os.path.join(pred_dir, f"pred_{idx:06d}.pt"))
-                saved += 1
-
-        result = {
-            "has_label": has_label,
-            "mean_loss": (running / max(1, n_batches)) if has_label else None,
-            "saved_predictions": saved if save_predictions else 0,
-            "pred_dir": pred_dir if save_predictions else None,
-        }
-        self._log(f"[eval] done | mean_loss={result['mean_loss']} | saved={result['saved_predictions']}")
-        return result
+                save_path = os.path.join(pred_dir, f"{pid}_pred.nii.gz")
+                self._save_pred_nii_3d(pr_zhw, save_path)
+    
+            # ---- 全症例集約（label別 mean/std/MAE と 全体MAE）----
+            if m_all.any():
+                ae = np.abs(pr_zhw[m_all] - gt_zhw[m_all])
+                global_all["n"] += int(ae.size)
+                global_all["abs_err"] += float(ae.sum())
+    
+            for r in range(1, 15):
+                m = (lb_zhw == r)
+                if not m.any():
+                    continue
+                pv = pr_zhw[m]
+                gv = gt_zhw[m]
+                n = int(pv.size)
+                global_acc[r]["n"] += n
+                global_acc[r]["sum"] += float(pv.sum())
+                global_acc[r]["sumsq"] += float((pv * pv).sum())
+                global_acc[r]["abs_err"] += float(np.abs(pv - gv).sum())
+    
+        # ===== 全症例での最終出力（小数点第5位まで） =====
+        if global_all["n"] > 0:
+            mae_all = global_all["abs_err"] / global_all["n"]
+            self._log(f"[eval] GLOBAL | MAE_all={mae_all:.5f}")
+        else:
+            self._log("[eval] GLOBAL | MAE_all=nan")
+    
+        for r in range(1, 15):
+            n = global_acc[r]["n"]
+            if n == 0:
+                continue
+            mean = global_acc[r]["sum"] / n
+            var = global_acc[r]["sumsq"] / n - mean * mean
+            if var < 0.0:
+                var = 0.0
+            std = float(np.sqrt(var))
+            mae = global_acc[r]["abs_err"] / n
+            self._log(f"[eval] GLOBAL | Label: {r:02d} | MAE: {mae:.5f} | mean±SD: {mean:.5f}±{std:.5f}")
+    
+        return {"done": True, "n_ids": len(buffers)}
 
     def fit(self, train_loader, val_loader):
         epochs = int(self.cfg.get("train", {}).get("epochs", 50))
         save_every = int(self.cfg.get("train", {}).get("save_every", 1))
-
+    
         self._log(f"device: {self.device}")
         self._log(f"epochs: {epochs} | amp: {self.use_amp}")
         self._log(f"ckpt_dir: {self.ckpt_dir}")
-
+    
         try:
             for epoch in range(1, epochs + 1):
+    
+                # ★ ここを追加
+                self._log("")
+                self._log("=" * 60)
+                self._log(f"Epoch {epoch}/{epochs}")
+                self._log("=" * 60)
+    
                 tr = self.train(train_loader)
                 va = self.validate(val_loader)
-
+    
                 self._log(
                     f"[epoch {epoch:03d}] "
                     f"train_loss={tr.loss:.6f} ({tr.seconds:.1f}s) | "
                     f"val_loss={va.loss:.6f} ({va.seconds:.1f}s)"
                 )
-
+    
                 self._save_checkpoint("last", epoch)
-
+    
                 score = va.loss
                 if self._monitor_better(score):
                     self.best_score = score
                     self._save_checkpoint("best", epoch)
                     self._log(f"✅ best updated: {self.best_score:.6f}")
-
+    
                 if save_every > 0 and (epoch % save_every == 0):
                     self._save_checkpoint(f"epoch_{epoch:03d}", epoch)
-
+    
         finally:
             self._save_training_artifacts()

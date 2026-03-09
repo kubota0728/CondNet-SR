@@ -75,7 +75,7 @@ def _load_unet_full_weights(
 
     _log(logger, f"Loading pretrained UNet_2D from: {ckpt_path}")
 
-    sd = torch.load(ckpt_path, map_location=device)
+    sd = torch.load(ckpt_path, map_location=device, weights_only=True)
 
     # もし {"model": ...} 形式なら吸収（ただし segmentation pth は普通これじゃない）
     if isinstance(sd, dict) and "model" in sd and isinstance(sd["model"], dict):

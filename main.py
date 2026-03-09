@@ -18,6 +18,12 @@ from datasets.dataloader import CondDataset
 from engine.builder import build
 from engine.trainer import Trainer
 
+import warnings
+warnings.filterwarnings(
+    "ignore",
+    category=UserWarning,
+    module="torch.cuda.nccl"
+)
 
 def _prepare_output_dirs(cfg):
     run_cfg = cfg.get("run", {})
@@ -103,7 +109,7 @@ def _load_checkpoint_into_model(model, ckpt_path: str, device, logger, strict: b
         raise FileNotFoundError(f"Specified pth not found: {ckpt_path}")
 
     logger.info(f"Loading checkpoint: {ckpt_path}")
-    ckpt = torch.load(ckpt_path, map_location=device)
+    ckpt = torch.load(ckpt_path, map_location=device, weights_only=True)
     state = ckpt["model"] if (isinstance(ckpt, dict) and "model" in ckpt) else ckpt
 
     def _load_one(m, sd):
