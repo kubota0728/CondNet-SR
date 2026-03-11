@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 
 run:
-  exp_name: exp01
   mode: train          # train / eval / predict / test
   data_parallel: true
   force_cpu: false
@@ -46,21 +45,22 @@ train:
 
 val:
   num_workers: 0
+  monitor_slide: 150
 
 eval:
-  load_pth: "D:/kubota/Data/Model10test/M2/best.pth"
+  load_pth: "D:/kubota/Data/Model10test/M3_099_02/best.pth"
   save_predictions: true
-  pred_dir: "D:/kubota/Data/Model10test/M2_nii"
+  pred_dir: "D:/kubota/Data/Model10test/M3_099_02_nii"
   
 loss:
-  name: logmae  #mae/logmae/condnet_cs
+  name: condnet_cs  #mae/logmae/condnet_cs
   
   lambda_stat: 1.0
-  lambda_rank: 0.2
-  lambda_smooth: 0.01
+  lambda_rank: 0.1 # 0.2
+  lambda_smooth: 0.01 # 0.01
 
-  w_mean: 0.5
-  w_std: 0.5
+  w_mean: 0.99
+  w_std: 0.01
   
   alpha: 0.7
   rank_pairs: 100

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, Optional, Any, Mapping, Tuple
 
 import torch
@@ -21,14 +21,13 @@ from losses import build_loss
 import nibabel as nib
 import numpy as np
 import matplotlib.pyplot as plt
-import math
 
-from collections import Counter
 
 @dataclass
 class EpochResult:
     loss: float
     seconds: float
+    terms: dict = field(default_factory=dict)
 
 
 class Trainer:
@@ -79,6 +78,11 @@ class Trainer:
         self.scaler = torch.amp.GradScaler(enabled=self.use_amp)
 
         self.log_every = int(train_cfg.get("log_every", 0))  # 0 means auto
+        
+        self.last_loss_terms = {}
+        
+        self.monitor_slide = int(cfg["val"].get("monitor_slide", 150))
+        
 
     def _log(self, msg: str):
         if self.logger is not None:
@@ -157,11 +161,23 @@ class Trainer:
         if missing:
             raise KeyError(f"Batch missing keys: {missing}. Available keys: {list(batch.keys())}")
 
-    def _compute_loss(self, pred: torch.Tensor, target: torch.Tensor, batch: Optional[dict] = None) -> torch.Tensor:
-        try:
-            return self.loss_fn(pred, target, batch)
-        except TypeError:
-            return self.loss_fn(pred, target)
+    def _compute_loss(
+        self,
+        pred: torch.Tensor,
+        target: torch.Tensor,
+        batch: Optional[dict] = None
+    ) -> torch.Tensor:
+    
+        loss = self.loss_fn(pred, target, batch=batch)
+    
+        # loss内訳を保存
+        terms = getattr(self.loss_fn, "last_terms", None)
+        if isinstance(terms, dict):
+            self.last_loss_terms = dict(terms)
+        else:
+            self.last_loss_terms = {}
+    
+        return loss
 
     def _monitor_better(self, score: float) -> bool:
         if self.best_score is None:
@@ -398,29 +414,89 @@ class Trainer:
         t0 = time.time()
         self._set_eval_mode()
         self._maybe_fix_frozen_transformers()
-
+    
         running = 0.0
         n_batches = 0
-
-        for batch in val_loader:
-            batch = self._to_device(batch)
-            self._require_keys(batch, ["img1", "img2", "label", "mask", "lab14"])
-
-            img1 = batch["img1"]
-            img2 = batch["img2"]
-            label = batch["label"]
-            mask = batch["mask"]
-
-            pred, _out_old = self._forward(img1, img2, mask)
-            loss = self._compute_loss(pred, label, batch)
-
-            running += float(loss.item())
-            n_batches += 1
-
+    
+        term_sums = {}
+        has_terms = False
+    
+        # 監視用スライス番号（yaml: val.monitor_slide）
+        monitor_slide = int(getattr(self, "monitor_slide", 150))
+    
+        # 監視用の1枚だけ保持
+        vis_sample = None
+    
+        # 必要なら導電率スケールを元に戻す
+        SCALE_BACK = 2.0 / 0.9
+    
+        with torch.no_grad():
+            for batch in val_loader:
+                batch = self._to_device(batch)
+                self._require_keys(batch, ["img1", "img2", "label", "mask", "lab14", "slice"])
+    
+                img1 = batch["img1"]
+                img2 = batch["img2"]
+                label = batch["label"]
+                mask = batch["mask"]
+                lab14 = batch["lab14"]
+                slices = batch["slice"]
+    
+                pred, _out_old = self._forward(img1, img2, mask)
+                loss = self._compute_loss(pred, label, batch)
+    
+                running += float(loss.item())
+                n_batches += 1
+    
+                # loss項の集計
+                terms = getattr(self, "last_loss_terms", None)
+                if isinstance(terms, dict) and len(terms) > 0:
+                    has_terms = True
+                    for k, v in terms.items():
+                        term_sums[k] = term_sums.get(k, 0.0) + float(v)
+    
+                # 監視用スライスを最初の1枚だけ取得
+                if vis_sample is None:
+                    if isinstance(slices, torch.Tensor):
+                        slices_list = slices.detach().cpu().tolist()
+                    else:
+                        slices_list = list(slices)
+    
+                    B = int(pred.shape[0])
+                    for i in range(B):
+                        if int(slices_list[i]) == monitor_slide:
+                            vis_sample = {
+                                "t1": img1[i, 0].detach().cpu().numpy(),
+                                "t2": img2[i, 0].detach().cpu().numpy(),
+                                "gt": label[i, 0].detach().cpu().numpy().astype(np.float32) * SCALE_BACK,
+                                "pred": pred[i, 0].detach().cpu().numpy().astype(np.float32) * SCALE_BACK,
+                                "lab14": lab14[i].detach().cpu().numpy(),
+                                "slice": int(slices_list[i]),
+                            }
+                            break
+    
         epoch_loss = running / max(1, n_batches)
         sec = time.time() - t0
         self.history["val_loss"].append(epoch_loss)
-        return EpochResult(loss=epoch_loss, seconds=sec)
+    
+        avg_terms = {}
+        if has_terms and n_batches > 0:
+            avg_terms = {k: v / n_batches for k, v in term_sums.items()}
+    
+        # 監視用画像を1枚だけ表示
+        if vis_sample is not None:
+            self._show_val_monitor_slice(
+                t1_2d=vis_sample["t1"],
+                t2_2d=vis_sample["t2"],
+                gt_2d=vis_sample["gt"],
+                pr_2d=vis_sample["pred"],
+                lb_2d=vis_sample["lab14"],
+                slice_id=vis_sample["slice"],
+            )
+        else:
+            self._log(f"[val] monitor_slide={monitor_slide} のスライスは見つかりませんでした。")
+    
+        return EpochResult(loss=epoch_loss, seconds=sec, terms=avg_terms)
 
     def _save_pred_nii_3d(self, pred_3d_zhw: np.ndarray, save_path: str):
         """
@@ -463,6 +539,42 @@ class Trainer:
     
         fig.suptitle(f"{pid} (z={z})", fontsize=18)
     
+        plt.tight_layout()
+        plt.show()
+    
+    def _show_val_monitor_slice(self, t1_2d, t2_2d, gt_2d, pr_2d, lb_2d, slice_id):
+
+        fig, axes = plt.subplots(1, 5, figsize=(18, 4))
+    
+        # T1
+        axes[0].imshow(t1_2d, cmap="gray")
+        axes[0].set_title("T1")
+        axes[0].axis("off")
+    
+        # T2
+        axes[1].imshow(t2_2d, cmap="gray")
+        axes[1].set_title("T2")
+        axes[1].axis("off")
+    
+        # GT
+        im = axes[2].imshow(gt_2d, cmap="jet", vmin=0, vmax=2.2)
+        axes[2].set_title("GT")
+        axes[2].axis("off")
+    
+        # Pred
+        axes[3].imshow(pr_2d, cmap="jet", vmin=0, vmax=2.2)
+        axes[3].set_title("Pred")
+        axes[3].axis("off")
+    
+        # label
+        axes[4].imshow(lb_2d, vmin=0, vmax=14)
+        axes[4].set_title("lab14")
+        axes[4].axis("off")
+    
+        # 共通colorbar
+        fig.colorbar(im, ax=axes[2:4], fraction=0.046, pad=0.04)
+    
+        plt.suptitle(f"Validation Monitor Slice = {slice_id}")
         plt.tight_layout()
         plt.show()
     
@@ -625,7 +737,6 @@ class Trainer:
         try:
             for epoch in range(1, epochs + 1):
     
-                # ★ ここを追加
                 self._log("")
                 self._log("=" * 60)
                 self._log(f"Epoch {epoch}/{epochs}")
@@ -634,11 +745,24 @@ class Trainer:
                 tr = self.train(train_loader)
                 va = self.validate(val_loader)
     
-                self._log(
-                    f"[epoch {epoch:03d}] "
-                    f"train_loss={tr.loss:.6f} ({tr.seconds:.1f}s) | "
-                    f"val_loss={va.loss:.6f} ({va.seconds:.1f}s)"
-                )
+                # validation loss の内訳がある場合だけ一緒に表示
+                if hasattr(va, "terms") and isinstance(va.terms, dict) and len(va.terms) > 0:
+                    terms_str = ", ".join(
+                        [f"{k}={v:.6f}" for k, v in va.terms.items()]
+                    )
+                    self._log(
+                        f"[epoch {epoch:03d}] "
+                        f"train_loss={tr.loss:.6f} ({tr.seconds:.1f}s) | "
+                        f"val_loss={va.loss:.6f} "
+                        f"[{terms_str}] "
+                        f"({va.seconds:.1f}s)"
+                    )
+                else:
+                    self._log(
+                        f"[epoch {epoch:03d}] "
+                        f"train_loss={tr.loss:.6f} ({tr.seconds:.1f}s) | "
+                        f"val_loss={va.loss:.6f} ({va.seconds:.1f}s)"
+                    )
     
                 self._save_checkpoint("last", epoch)
     

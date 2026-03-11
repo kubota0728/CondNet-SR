@@ -52,18 +52,21 @@ def _make_loader(df, cfg, mode: str):
         shuffle = bool(data_cfg.get("shuffle_train", True))
         num_workers = int(train_cfg.get("num_workers", 0))
         bs = batch_size
+        augmentation = True
     elif mode == "val":
         shuffle = bool(data_cfg.get("shuffle_val", False))
         num_workers = int(val_cfg.get("num_workers", 0))
         bs = val_batch_size
+        augmentation = False
     elif mode in ("eval", "test", "predict"):
         shuffle = False
         num_workers = int(val_cfg.get("num_workers", 0))
         bs = test_batch_size
+        augmentation = False
     else:
         raise ValueError(f"Unknown loader mode: {mode}")
 
-    ds = CondDataset(df, image_size=image_size)
+    ds = CondDataset(df, image_size=image_size,augmentation=augmentation)
     loader = DataLoader(
         ds,
         batch_size=bs,
