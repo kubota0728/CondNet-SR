@@ -29,7 +29,7 @@ CFG = {
     # cond は {pid} → 46 のようにそのまま
     # label/T1/T2 は {pid:03d} → 046 のように3桁
     # -----------------------------
-    "cond_nii_tmpl":  "D:/kubota/Data/Model10test/M3_099_02_nii/{pid}_pred.nii.gz",
+    "cond_nii_tmpl":  "D:/kubota/Data/Model10test/M3_095_01_nii/{pid}_pred.nii.gz",
     "label_nii_tmpl": "D:/kubota/Data/Model9/label14/IXI{pid:03d}_label_after.nii.gz",
     "T1_nii_tmpl":    "D:/kubota/Data/Model8/image_after/IXI{pid:03d}_T1_after.nii.gz",
     "T2_nii_tmpl":    "D:/kubota/Data/Model8/image_after/IXI{pid:03d}_T2_after.nii.gz",
@@ -37,8 +37,8 @@ CFG = {
     # -----------------------------
     # 出力先
     # -----------------------------
-    "out_csv_dir": "D:/Kubota/data/Model10test/csv/M3_099_02",
-    "out_excel": "D:/Kubota/data/Model10test/csv/M3_099_02/label_summary.xlsx",
+    "out_csv_dir": "D:/Kubota/data/Model10test/csv/M3_095_01",
+    "out_excel": "D:/Kubota/data/Model10test/csv/M3_095_01/label_summary.xlsx",
 
     # -----------------------------
     # 表示・解析設定

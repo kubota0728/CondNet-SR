@@ -543,36 +543,40 @@ class Trainer:
         plt.show()
     
     def _show_val_monitor_slice(self, t1_2d, t2_2d, gt_2d, pr_2d, lb_2d, slice_id):
-
-        fig, axes = plt.subplots(1, 5, figsize=(18, 4))
+    
+        fig, axes = plt.subplots(
+            1, 6,
+            figsize=(20,4),
+            gridspec_kw={"width_ratios":[1,1,1,1,1,0.05]}
+        )
     
         # T1
-        axes[0].imshow(t1_2d, cmap="gray")
+        axes[0].imshow(t1_2d, cmap="gray", interpolation="nearest")
         axes[0].set_title("T1")
         axes[0].axis("off")
     
         # T2
-        axes[1].imshow(t2_2d, cmap="gray")
+        axes[1].imshow(t2_2d, cmap="gray", interpolation="nearest")
         axes[1].set_title("T2")
         axes[1].axis("off")
     
-        # GT
-        im = axes[2].imshow(gt_2d, cmap="jet", vmin=0, vmax=2.2)
-        axes[2].set_title("GT")
+        # label
+        axes[2].imshow(lb_2d, vmin=0, vmax=14, interpolation="nearest")
+        axes[2].set_title("lab14")
         axes[2].axis("off")
     
-        # Pred
-        axes[3].imshow(pr_2d, cmap="jet", vmin=0, vmax=2.2)
-        axes[3].set_title("Pred")
+        # GT
+        im = axes[3].imshow(gt_2d, cmap="jet", vmin=0, vmax=2.2, interpolation="nearest")
+        axes[3].set_title("GT")
         axes[3].axis("off")
     
-        # label
-        axes[4].imshow(lb_2d, vmin=0, vmax=14)
-        axes[4].set_title("lab14")
+        # Pred
+        axes[4].imshow(pr_2d, cmap="jet", vmin=0, vmax=2.2, interpolation="nearest")
+        axes[4].set_title("Pred")
         axes[4].axis("off")
     
-        # 共通colorbar
-        fig.colorbar(im, ax=axes[2:4], fraction=0.046, pad=0.04)
+        # colorbar
+        fig.colorbar(im, cax=axes[5])
     
         plt.suptitle(f"Validation Monitor Slice = {slice_id}")
         plt.tight_layout()

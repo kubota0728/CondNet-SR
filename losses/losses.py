@@ -93,6 +93,9 @@ class CondNetCSLoss(nn.Module):
 
         self.last_terms = {}
         self.last_debug = {}
+        
+        self.mean_loss = MAELoss()
+        # self.mean_loss = MixedLogMAELoss()
 
     def forward(self, pred, target, batch=None):
         if batch is None:
@@ -119,7 +122,7 @@ class CondNetCSLoss(nn.Module):
         }
 
         # MAE は純粋な画素ごとの MAE
-        loss_mean = self._loss_mean(pred, label)
+        loss_mean = self.mean_loss(pred, label)
 
         # 重みが 0 の項は計算しない
         if self.lambda_stat != 0.0 and self.w_std != 0.0:
@@ -186,9 +189,6 @@ class CondNetCSLoss(nn.Module):
             core2 = core1.clone()
 
         return core1, core2
-
-    def _loss_mean(self, pred, label):
-        return torch.mean(torch.abs(pred - label))
 
     def _loss_std(self, pred, label14):
         vals = []
