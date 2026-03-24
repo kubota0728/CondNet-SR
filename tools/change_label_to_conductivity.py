@@ -74,7 +74,7 @@ def convert_label_to_cond_nii(label_path, output_path):
 
 
 # 使用例
-pid=575
+pid=401
 label_path = f"D:/kubota/Data/Model9/label14/IXI{pid:03d}_label_after.nii.gz"
 output_path = f"D:/kubota/Data/Model10test/uniform_nii/{pid}_uniform.nii.gz"
 

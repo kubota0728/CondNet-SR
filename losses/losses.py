@@ -20,7 +20,7 @@ class MixedLogMAELoss(nn.Module):
     0.95*MAE + 0.05*logMAE
     logMAE = mean(|log(pred) - log(target)|)
     """
-    def __init__(self, eps: float = 1e-6, w_mae: float = 0.95, w_log: float = 0.05):
+    def __init__(self, eps: float = 1e-6, w_mae: float = 0.95, w_log: float = 0.05): #0.95から修正。!!ハードコーディング
         super().__init__()
         self.eps = float(eps)
         self.w_mae = float(w_mae)
@@ -66,6 +66,7 @@ class CondNetCSLoss(nn.Module):
         alpha=0.5,
         eps=1e-6,
         full_pair_threshold=20,
+        mean_loss_name="mae",
     ):
         super().__init__()
 
@@ -94,8 +95,13 @@ class CondNetCSLoss(nn.Module):
         self.last_terms = {}
         self.last_debug = {}
         
-        self.mean_loss = MAELoss()
-        # self.mean_loss = MixedLogMAELoss()
+        mean_loss_name = str(mean_loss_name).lower()
+        if mean_loss_name == "mae":
+            self.mean_loss = MAELoss()
+        elif mean_loss_name == "logmae":
+            self.mean_loss = MixedLogMAELoss(w_mae=0.99, w_log=0.01)
+        else:
+            raise ValueError(f"Unknown mean_loss_name: {mean_loss_name}")
 
     def forward(self, pred, target, batch=None):
         if batch is None:
@@ -349,6 +355,7 @@ def build_loss(cfg):
             rank_pairs=loss_cfg.get("rank_pairs", 100),
             alpha=loss_cfg.get("alpha", 0.5),
             full_pair_threshold=loss_cfg.get("full_pair_threshold", 20),
+            mean_loss_name=loss_cfg.get("mean_loss", "mae"),
         )
 
     raise ValueError(f"Unknown loss: {name}")

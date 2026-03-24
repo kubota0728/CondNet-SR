@@ -410,7 +410,7 @@ class Trainer:
         return EpochResult(loss=epoch_loss, seconds=sec)
 
     @torch.no_grad()
-    def validate(self, val_loader) -> EpochResult:
+    def validate(self, val_loader, epoch) -> EpochResult:
         t0 = time.time()
         self._set_eval_mode()
         self._maybe_fix_frozen_transformers()
@@ -492,6 +492,7 @@ class Trainer:
                 pr_2d=vis_sample["pred"],
                 lb_2d=vis_sample["lab14"],
                 slice_id=vis_sample["slice"],
+                epoch=epoch,
             )
         else:
             self._log(f"[val] monitor_slide={monitor_slide} のスライスは見つかりませんでした。")
@@ -542,45 +543,43 @@ class Trainer:
         plt.tight_layout()
         plt.show()
     
-    def _show_val_monitor_slice(self, t1_2d, t2_2d, gt_2d, pr_2d, lb_2d, slice_id):
-    
+    def _show_val_monitor_slice(self, t1_2d, t2_2d, gt_2d, pr_2d, lb_2d, slice_id, epoch):
         fig, axes = plt.subplots(
             1, 6,
-            figsize=(20,4),
-            gridspec_kw={"width_ratios":[1,1,1,1,1,0.05]}
+            figsize=(20, 4),
+            gridspec_kw={"width_ratios": [1, 1, 1, 1, 1, 0.05]}
         )
     
-        # T1
         axes[0].imshow(t1_2d, cmap="gray", interpolation="nearest")
         axes[0].set_title("T1")
         axes[0].axis("off")
     
-        # T2
         axes[1].imshow(t2_2d, cmap="gray", interpolation="nearest")
         axes[1].set_title("T2")
         axes[1].axis("off")
     
-        # label
         axes[2].imshow(lb_2d, vmin=0, vmax=14, interpolation="nearest")
         axes[2].set_title("lab14")
         axes[2].axis("off")
     
-        # GT
         im = axes[3].imshow(gt_2d, cmap="jet", vmin=0, vmax=2.2, interpolation="nearest")
         axes[3].set_title("GT")
         axes[3].axis("off")
     
-        # Pred
         axes[4].imshow(pr_2d, cmap="jet", vmin=0, vmax=2.2, interpolation="nearest")
         axes[4].set_title("Pred")
         axes[4].axis("off")
     
-        # colorbar
         fig.colorbar(im, cax=axes[5])
     
-        plt.suptitle(f"Validation Monitor Slice = {slice_id}")
+        plt.suptitle(f"Epoch {epoch} | Validation Monitor Slice = {slice_id}")
         plt.tight_layout()
-        plt.show()
+    
+        save_dir = os.path.join(self.ckpt_dir, "val_monitor")
+        os.makedirs(save_dir, exist_ok=True)
+        save_path = os.path.join(save_dir, f"epoch_{epoch:03d}_slice_{slice_id}.png")
+        plt.savefig(save_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
     
     def _compute_metrics_case(self, pred_zhw, gt_zhw, lab14_zhw):
         """
@@ -747,7 +746,7 @@ class Trainer:
                 self._log("=" * 60)
     
                 tr = self.train(train_loader)
-                va = self.validate(val_loader)
+                va = self.validate(val_loader, epoch)
     
                 # validation loss の内訳がある場合だけ一緒に表示
                 if hasattr(va, "terms") and isinstance(va.terms, dict) and len(va.terms) > 0:

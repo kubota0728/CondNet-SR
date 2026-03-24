@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 run:
-  mode: test          # train / eval / predict / test
+  mode: train          # train / eval / predict / test
   data_parallel: true
   force_cpu: false
 
@@ -48,9 +48,9 @@ val:
   monitor_slide: 150
 
 eval:
-  load_pth: "D:/kubota/Data/Model10test/Ablation_noRank/best.pth"
+  load_pth: "D:/kubota/Data/Model10test/M3_095_01/best.pth"
   save_predictions: true
-  pred_dir: "D:/kubota/Data/Model10test/ablation_noRank_nii"
+  pred_dir: "D:/kubota/Data/Model10test/M3_095_01_nii"
   
 loss:
   name: condnet_cs  #mae/logmae/condnet_cs
