@@ -1,13 +1,13 @@
-# CondNet-CR
+# CondNet-SR
 
-This repository contains the implementation of CondNet-CR,  
-a conductivity estimation framework based on a pretrained segmentation backbone (CondNet-TART).
+This repository contains the implementation of CondNet-SR,  
+a conductivity estimation framework based on a pretrained segmentation backbone (CondNet-TART) with the Statistical-Rank (SR) loss.
 
 ---
 
 ## Overview
 
-CondNet-CR consists of:
+CondNet-SR consists of:
 
 - Segmentation backbone (UNet + Transformer)
 - Transfer head for conductivity regression
@@ -19,7 +19,7 @@ CondNet-CR consists of:
 ## Project Structure
 
 ```
-CondNet-CR/
+CondNet-SR/
 ├── configs/
 ├── datasets/
 ├── engine/
@@ -35,7 +35,7 @@ CondNet-CR/
 
 ## Pretraining Requirement
 
-The segmentation backbone must be pretrained before running CondNet-CR.
+The segmentation backbone must be pretrained before running CondNet-SR.
 
 Pretraining scripts are provided in:
 
