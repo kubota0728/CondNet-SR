@@ -99,3 +99,14 @@ checkpoints/<exp_name>/
 
 - Dataset and checkpoints are not included in this repository.
 - Modify paths in configs/config.yaml according to your environment.
+- Electric field simulations and detailed analysis pipelines are not fully included in this repository.
+
+## Citation
+
+If you use this code, please cite:
+
+Y. Kubota et al.,  
+"MRI-Constrained Estimation of Layer-Dependent Gray Matter Conductivity: Implications for Brain Stimulation Electric Fields"
+
+
+
