@@ -90,41 +90,69 @@ def plot_box_comparison(data_list, labels_present, cfg):
 
     positions = range(1, len(data_list) + 1)
 
-    ax.boxplot(
+    # ===== 色定義 =====
+    edge_colors = {
+        "original": "#1f77b4",   # 青
+        "mixed": "#2ca02c",      # 緑
+        "proposed": "#ff7f0e",   # オレンジ
+    }
+
+    face_colors = {
+        "original": "#9ecae1",   # 薄い青
+        "mixed": "#a1d99b",      # 薄い緑
+        "proposed": "#f6c28b",   # 薄いオレンジ
+    }
+
+    # ラベル順に対応させる
+    edge_list = [edge_colors.get(l.lower(), "black") for l in labels_present]
+    face_list = [face_colors.get(l.lower(), "white") for l in labels_present]
+
+    # ===== boxplot =====
+    bp = ax.boxplot(
         data_list,
         positions=positions,
         widths=0.7,
         patch_artist=True,
         showfliers=False,
-        #showmeans=True,
-        #meanprops=dict(
-        #    marker="o",
-        #    markerfacecolor="#08519c",   # 濃い青
-        #    markeredgecolor="#08519c",
-        #    markersize=6
-        #),
-        boxprops=dict(facecolor="#9ecae1", edgecolor="black", linewidth=1.0),
-        whiskerprops=dict(color="black", linewidth=1.0),
-        capprops=dict(color="black", linewidth=1.0),
-        medianprops=dict(color="black", linewidth=1.2),
+        boxprops=dict(linewidth=1.5),
+        whiskerprops=dict(linewidth=1.5),
+        capprops=dict(linewidth=1.5),
+        medianprops=dict(linewidth=1.8),
     )
 
-    # 基準値ライン
+    # ===== 色を個別適用 =====
+    for i, (box, edge_c, face_c) in enumerate(zip(bp["boxes"], edge_list, face_list)):
+        box.set_facecolor(face_c)
+        box.set_edgecolor(edge_c)
+
+    edge_repeat = []
+    for c in edge_list:
+        edge_repeat.extend([c, c])
+    
+    for whisker, edge_c in zip(bp["whiskers"], edge_repeat):
+        whisker.set_color(edge_c)
+    
+    for cap, edge_c in zip(bp["caps"], edge_repeat):
+        cap.set_color(edge_c)
+
+    for median, edge_c in zip(bp["medians"], edge_list):
+        median.set_color(edge_c)
+
+    # ===== 参照線（濃いグレー）=====
     ref = cfg.get("reference_value", None)
     if ref is not None:
         ax.axhline(
             y=ref,
-            color="orange",
+            color="#555555",
             linestyle="-",
-            linewidth=1.5,
-            alpha=0.8
+            linewidth=2.0,
+            alpha=0.9
         )
 
+    # ===== 軸設定 =====
     ax.set_xticks(list(positions))
     ax.set_xticklabels([cfg["label_map"].get(c, c) for c in labels_present])
 
-    #ax.set_ylabel(cfg["ylabel"], fontsize=18)
-    #ax.set_title(cfg["title"], fontsize=18)
     ax.tick_params(labelsize=24)
 
     # y軸範囲
@@ -140,7 +168,7 @@ def plot_box_comparison(data_list, labels_present, cfg):
 
     ax.grid(True, axis="y", alpha=0.3)
 
-    # 上右の枠を消す
+    # 枠
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
 
@@ -149,7 +177,6 @@ def plot_box_comparison(data_list, labels_present, cfg):
 
     out_dir = os.path.dirname(cfg["csv_path"])
     os.makedirs(out_dir, exist_ok=True)
-    ax = plt.gca()
 
     ax.spines['top'].set_visible(True)
     ax.spines['right'].set_visible(True)
