@@ -364,13 +364,18 @@ class Trainer:
         epoch: Optional[int] = None,
         total_epochs: Optional[int] = None,
         batch_cb: Optional[Callable[[dict], None]] = None,
+        pause_check: Optional[Callable[[], bool]] = None,
+        stop_check: Optional[Callable[[], bool]] = None,
     ) -> EpochResult:
         """
         1 エポック分の学習ループ。
 
         Args:
             epoch, total_epochs : GUI 表示用。batch_cb に渡すために受け取る。
-            batch_cb : 各バッチ終了時に dict を受け取る。None で挙動変化なし。
+            batch_cb  : 各バッチ終了時に dict を受け取る。None で挙動変化なし。
+                        dict には "phase": "train" が含まれる。
+            pause_check: True を返している間はバッチの進行を止める。None で無効。
+            stop_check : True を返すと途中でループを抜ける。
         """
         t0 = time.time()
         self._set_train_mode()
@@ -388,6 +393,18 @@ class Trainer:
         autocast_enabled = self.use_amp and (self.device.type == "cuda")
 
         for i, batch in enumerate(train_loader, start=1):
+            # ---- pause handling (stop チェックもここで拾う) ----
+            if pause_check is not None and pause_check():
+                self._log(f"[pause] at train iter {i}/{total_batches}")
+                while pause_check():
+                    if stop_check is not None and stop_check():
+                        break
+                    time.sleep(0.1)
+                self._log("[resume]")
+
+            if stop_check is not None and stop_check():
+                break
+
             batch = self._to_device(batch)
             self._require_keys(batch, ["img1", "img2", "label", "mask", "lab14"])
 
@@ -420,10 +437,10 @@ class Trainer:
             if i % log_every == 0:
                 self._log(f"[train] iter {i}/{total_batches} | loss={running/n_batches:.6f}")
 
-            # GUI バッチ進捗コールバック
             if batch_cb is not None:
                 try:
                     batch_cb({
+                        "phase": "train",
                         "epoch": int(epoch) if epoch is not None else 0,
                         "total_epochs": int(total_epochs) if total_epochs is not None else 0,
                         "batch": int(i),
@@ -446,6 +463,10 @@ class Trainer:
         epoch,
         preview_cases: Optional[List[Tuple[str, int]]] = None,
         preview_cb: Optional[Callable[[int, List[dict]], None]] = None,
+        batch_cb: Optional[Callable[[dict], None]] = None,
+        total_epochs: Optional[int] = None,
+        pause_check: Optional[Callable[[], bool]] = None,
+        stop_check: Optional[Callable[[], bool]] = None,
     ) -> EpochResult:
         """
         Args:
@@ -486,8 +507,22 @@ class Trainer:
                 preview_key_set.add((str(pid), int(sl)))
         preview_collected: dict = {}
 
+        total_val_batches = len(val_loader)
+
         with torch.no_grad():
-            for batch in val_loader:
+            for val_i, batch in enumerate(val_loader, start=1):
+                # pause / stop を val でも尊重
+                if pause_check is not None and pause_check():
+                    self._log(f"[pause] at val iter {val_i}/{total_val_batches}")
+                    while pause_check():
+                        if stop_check is not None and stop_check():
+                            break
+                        time.sleep(0.1)
+                    self._log("[resume]")
+
+                if stop_check is not None and stop_check():
+                    break
+
                 batch = self._to_device(batch)
                 self._require_keys(batch, ["img1", "img2", "label", "mask", "lab14", "slice"])
 
@@ -502,7 +537,8 @@ class Trainer:
                 pred, _out_old = self._forward(img1, img2, mask)
                 loss = self._compute_loss(pred, label, batch)
 
-                running += float(loss.item())
+                batch_loss = float(loss.item())
+                running += batch_loss
                 n_batches += 1
 
                 # loss項の集計
@@ -511,6 +547,21 @@ class Trainer:
                     has_terms = True
                     for k, v in terms.items():
                         term_sums[k] = term_sums.get(k, 0.0) + float(v)
+
+                # GUI 向け val バッチ進捗
+                if batch_cb is not None:
+                    try:
+                        batch_cb({
+                            "phase": "val",
+                            "epoch": int(epoch) if epoch is not None else 0,
+                            "total_epochs": int(total_epochs) if total_epochs is not None else 0,
+                            "batch": int(val_i),
+                            "total_batches": int(total_val_batches),
+                            "batch_loss": batch_loss,
+                            "running_loss": running / n_batches,
+                        })
+                    except Exception as e:
+                        self._log(f"[batch_cb/val] error ignored: {e}")
 
                 # 監視用スライスを最初の1枚だけ取得
                 if isinstance(slices, torch.Tensor):
@@ -826,6 +877,7 @@ class Trainer:
         preview_cb: Optional[Callable[[int, List[dict]], None]] = None,
         preview_cases: Optional[List[Tuple[str, int]]] = None,
         batch_cb: Optional[Callable[[dict], None]] = None,
+        pause_check: Optional[Callable[[], bool]] = None,
     ):
         """
         学習ループ本体。
@@ -862,12 +914,18 @@ class Trainer:
                     epoch=epoch,
                     total_epochs=epochs,
                     batch_cb=batch_cb,
+                    pause_check=pause_check,
+                    stop_check=stop_check,
                 )
                 va = self.validate(
                     val_loader,
                     epoch,
                     preview_cases=preview_cases,
                     preview_cb=preview_cb,
+                    batch_cb=batch_cb,
+                    total_epochs=epochs,
+                    pause_check=pause_check,
+                    stop_check=stop_check,
                 )
 
                 # validation loss の内訳がある場合だけ一緒に表示

@@ -151,6 +151,7 @@ def run_train(
     preview_cb: Optional[Callable[[int, list], None]] = None,
     preview_cases: Optional[list] = None,
     batch_cb: Optional[Callable[[Dict[str, Any]], None]] = None,
+    pause_check: Optional[Callable[[], bool]] = None,
 ) -> None:
     """
     Run a full training pass.
@@ -213,6 +214,7 @@ def run_train(
         preview_cb=preview_cb,
         preview_cases=preview_cases,
         batch_cb=batch_cb,
+        pause_check=pause_check,
     )
 
 
