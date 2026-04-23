@@ -57,3 +57,10 @@ Thumbs.db
 # =========================
 .vscode/
 .idea/
+
+# =========================
+# Local-only GUI (not published)
+# =========================
+gui/
+gui_state.json
+.claude/
