@@ -1,12 +1,61 @@
 # -*- coding: utf-8 -*-
 """
-Created on Thu Feb 26 16:59:29 2026
+Pretrain the CondNet-SR backbone (UNet + Transformer) on a segmentation task.
 
+This step is REQUIRED before running CondNet-SR (main.py). The output
+`best.pth` must be passed to `model.pretrained_unet_path` in
+`configs/config.yaml`.
+
+Architecture:
+  UNet + 6 TransformerBlock(embed_size=512, heads=4).
+  Input : T1 + T2 + T2-missing mask (3 channels, concatenated)
+  Output: 15-class segmentation logits (labels 0..14)
+  Loss  : 0.5 * SoftBCEWithLogitsLoss + 0.5 * TverskyLoss
+          (both from segmentation_models_pytorch)
+
+IMPORTANT -- shared architecture contract:
+  The UNet_2D defined here MUST stay architecturally identical to
+  model/condnet_tart.py::UNet_2D. Their state_dicts are compatible by
+  design so weights transfer cleanly. Changing one side without the
+  other breaks weight loading in main.py.
+
+Input data:
+  Path CSVs produced by tools/preprocess/02_export_png_and_paths.py
+  (columns: t1_img, t2_img, label, t2mask). Do NOT pass the raw split
+  CSVs from 01_stratified_split.py directly.
+
+Output (under Config.out_dir):
+  - best.pth         : weights at the best validation-loss epoch
+  - last.pth         : weights at the final epoch
+  - train_{epoch}.pth: per-epoch checkpoints
+  - history.pkl      : train_loss / val_loss history
+  - output.log       : captured stdout
+
+How to run:
+  1. Edit the Config dataclass below (paths, epochs, batch_size, lr).
+  2. python tools/pretrain/seg_pretrain.py
+  3. Point configs/config.yaml::model.pretrained_unet_path to
+     <out_dir>/best.pth.
+
+Key settings (edit the Config dataclass below):
+  train_csv, val_csv, test_csv, out_dir,
+  batch_size, epochs, lr, augmentation_prob, seed.
+
+Dependencies (beyond standard PyTorch):
+  pip install segmentation_models_pytorch opencv-python pillow
+
+Reference:
+  Y. Kubota, S. Kodera, and A. Hirata,
+  "A novel transfer learning framework for non-uniform conductivity
+   estimation with limited data in personalized brain stimulation,"
+  Physics in Medicine & Biology, vol. 70, no. 10, p. 105002, May 2025.
+  DOI: 10.1088/1361-6560/add105
+
+See tools/pretrain/README.md for full documentation.
+
+Created on Thu Feb 26 16:59:29 2026
 @author: kubota
 """
-
-# seg_pretrain.py
-# 1-file segmentation pretraining script with progress printing
 
 # ----------------------------
 # Imports

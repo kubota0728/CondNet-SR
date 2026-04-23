@@ -1,11 +1,43 @@
 # -*- coding: utf-8 -*-
 """
-Created on Thu Feb 26 12:20:47 2026
+Export NIfTI volumes to per-slice PNG files and build the dataloader path CSV.
 
+Step 2 of the preprocessing pipeline. Run after 01_stratified_split.py.
+
+Prerequisites (done in upstream Model8 pipeline; NOT included in this repo):
+  - T1 / T2 MRI and label map co-registered
+  - T1 / T2 intensities 99-percentile normalized
+  (The "_after" suffix in NIfTI filenames marks this processed state.)
+
+Input:
+  - Split CSV from Step 1 (set CSV_PATH below; re-run once per split)
+  - NIfTI files named:
+      <IMAGE_DIR>/IXI{id:03d}_T1_after.nii.gz
+      <IMAGE_DIR>/IXI{id:03d}_T2_after.nii.gz
+      <LABEL_DIR>/IXI{id:03d}_label_after.nii.gz
+
+Output (per-case folders under OUT_DIR/<IXI_prefix>/):
+  - img/   IXI{id:03d}_z{zzz}_T1.png,  _T2.png
+  - label/ IXI{id:03d}_z{zzz}_label.png    (raw label x 18 for visibility;
+                                            the dataloader divides by 18)
+  - t2mask/IXI{id:03d}_z{zzz}_T2mask.png   (T2-missing mask: T1>T1_THRESH & T2==0)
+  - <OUT_DIR>/paths_all_slices.csv         (path CSV consumed by CondDataset)
+
+Note:
+  normalize_volume_to_uint8() performs only a volume-wise min-max mapping to
+  0-255 for PNG storage. It is NOT an intensity-correction step; 99-percentile
+  normalization is assumed to be already done upstream.
+
+Key settings (edit constants below):
+  CSV_PATH, LABEL_DIR, IMAGE_DIR, OUT_DIR,
+  T1_THRESH, T2_ZERO_EPS, MASK_SCALE_255.
+
+See tools/preprocess/README.md for the full pipeline context and output
+CSV column specification.
+
+Created on Thu Feb 26 12:20:47 2026
 @author: kubota
 """
-
-# export_ixi_png_and_paths.py
 from __future__ import annotations
 
 import os

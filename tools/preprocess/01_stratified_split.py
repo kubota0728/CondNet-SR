@@ -1,11 +1,36 @@
 # -*- coding: utf-8 -*-
 """
-Created on Thu Feb 26 11:35:13 2026
+Split the IXI subject list into train / val / test with age-and-sex stratification.
 
+Step 1 of the preprocessing pipeline.
+
+Input:
+  Subject-metadata CSV (set INPUT_CSV below) with columns:
+    - ID   : subject identifier
+    - AGE  : age in years
+    - Sex  : "Male" / "Female"
+
+Output:
+  Three CSVs under OUT_DIR:
+    - train.csv
+    - val.csv
+    - test.csv
+
+Stratification:
+  The training set is sampled to roughly match TRAIN_SEX_TARGET across the age
+  bins defined by AGE_BIN_EDGES. Val / test are drawn randomly from the
+  remaining subjects. Targets are relaxed automatically when a bin lacks
+  enough samples.
+
+Key settings (edit constants below):
+  INPUT_CSV, OUT_DIR, N_TRAIN / N_VAL / N_TEST,
+  AGE_BIN_EDGES, TRAIN_SEX_TARGET, RANDOM_SEED.
+
+See tools/preprocess/README.md for the full pipeline context.
+
+Created on Thu Feb 26 11:35:13 2026
 @author: kubota
 """
-
-# stratified_split_ixi.py
 
 from __future__ import annotations
 import math
