@@ -177,9 +177,6 @@ Key fields:
 | `loss.name` | `mae` / `logmae` / `condnet_cs` (SR loss) |
 | `loss.lambda_stat`, `lambda_rank`, `lambda_smooth` | SR loss weights |
 
-Variants `configs/config2.yaml` 〜 `config4.yaml` are hyperparameter sweeps
-used for overnight batch experiments.
-
 ---
 
 ## Notes
