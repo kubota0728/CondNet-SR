@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 import time
 from dataclasses import dataclass, field
-from typing import Dict, Optional, Any, Mapping, Tuple
+from typing import Callable, Dict, List, Optional, Any, Mapping, Tuple
 
 import torch
 import torch.nn as nn
@@ -410,58 +410,85 @@ class Trainer:
         return EpochResult(loss=epoch_loss, seconds=sec)
 
     @torch.no_grad()
-    def validate(self, val_loader, epoch) -> EpochResult:
+    def validate(
+        self,
+        val_loader,
+        epoch,
+        preview_cases: Optional[List[Tuple[str, int]]] = None,
+        preview_cb: Optional[Callable[[int, List[dict]], None]] = None,
+    ) -> EpochResult:
+        """
+        Args:
+            val_loader : 検証データローダ
+            epoch      : エポック番号
+            preview_cases : GUI プレビュー対象の (ixi_id, slice) タプル列。
+                            None/空で挙動変化なし。
+            preview_cb    : epoch 終端で preview サンプル群を受け取るコールバック。
+                            None ならスキップ。
+
+        挙動互換:
+            preview_cases / preview_cb を渡さない限り、既存の monitor_slide 処理
+            も loss 計算も変更されていません。
+        """
         t0 = time.time()
         self._set_eval_mode()
         self._maybe_fix_frozen_transformers()
-    
+
         running = 0.0
         n_batches = 0
-    
+
         term_sums = {}
         has_terms = False
-    
+
         # 監視用スライス番号（yaml: val.monitor_slide）
         monitor_slide = int(getattr(self, "monitor_slide", 150))
-    
+
         # 監視用の1枚だけ保持
         vis_sample = None
-    
+
         # 必要なら導電率スケールを元に戻す
         SCALE_BACK = 2.0 / 0.9
-    
+
+        # GUI プレビュー用: (pid, slice) -> 収集した sample dict
+        preview_key_set = set()
+        if preview_cases:
+            for pid, sl in preview_cases:
+                preview_key_set.add((str(pid), int(sl)))
+        preview_collected: dict = {}
+
         with torch.no_grad():
             for batch in val_loader:
                 batch = self._to_device(batch)
                 self._require_keys(batch, ["img1", "img2", "label", "mask", "lab14", "slice"])
-    
+
                 img1 = batch["img1"]
                 img2 = batch["img2"]
                 label = batch["label"]
                 mask = batch["mask"]
                 lab14 = batch["lab14"]
                 slices = batch["slice"]
-    
+                ixi_ids = batch.get("ixi_id", None)
+
                 pred, _out_old = self._forward(img1, img2, mask)
                 loss = self._compute_loss(pred, label, batch)
-    
+
                 running += float(loss.item())
                 n_batches += 1
-    
+
                 # loss項の集計
                 terms = getattr(self, "last_loss_terms", None)
                 if isinstance(terms, dict) and len(terms) > 0:
                     has_terms = True
                     for k, v in terms.items():
                         term_sums[k] = term_sums.get(k, 0.0) + float(v)
-    
+
                 # 監視用スライスを最初の1枚だけ取得
+                if isinstance(slices, torch.Tensor):
+                    slices_list = slices.detach().cpu().tolist()
+                else:
+                    slices_list = list(slices)
+
                 if vis_sample is None:
-                    if isinstance(slices, torch.Tensor):
-                        slices_list = slices.detach().cpu().tolist()
-                    else:
-                        slices_list = list(slices)
-    
                     B = int(pred.shape[0])
                     for i in range(B):
                         if int(slices_list[i]) == monitor_slide:
@@ -474,16 +501,35 @@ class Trainer:
                                 "slice": int(slices_list[i]),
                             }
                             break
-    
+
+                # GUI プレビュー: 指定された (pid, slice) を収集
+                if preview_key_set and ixi_ids is not None:
+                    if isinstance(ixi_ids, torch.Tensor):
+                        ixi_ids_list = [str(x) for x in ixi_ids.detach().cpu().tolist()]
+                    else:
+                        ixi_ids_list = [str(x) for x in ixi_ids]
+                    B = int(pred.shape[0])
+                    for i in range(B):
+                        key = (ixi_ids_list[i], int(slices_list[i]))
+                        if key in preview_key_set and key not in preview_collected:
+                            preview_collected[key] = {
+                                "pid": key[0],
+                                "slice": key[1],
+                                "t1": img1[i, 0].detach().cpu().numpy().astype(np.float32),
+                                "t2": img2[i, 0].detach().cpu().numpy().astype(np.float32),
+                                "gt": label[i, 0].detach().cpu().numpy().astype(np.float32) * SCALE_BACK,
+                                "pred": pred[i, 0].detach().cpu().numpy().astype(np.float32) * SCALE_BACK,
+                            }
+
         epoch_loss = running / max(1, n_batches)
         sec = time.time() - t0
         self.history["val_loss"].append(epoch_loss)
-    
+
         avg_terms = {}
         if has_terms and n_batches > 0:
             avg_terms = {k: v / n_batches for k, v in term_sums.items()}
-    
-        # 監視用画像を1枚だけ表示
+
+        # 監視用画像を1枚だけ表示（既存挙動そのまま）
         if vis_sample is not None:
             self._show_val_monitor_slice(
                 t1_2d=vis_sample["t1"],
@@ -496,7 +542,19 @@ class Trainer:
             )
         else:
             self._log(f"[val] monitor_slide={monitor_slide} のスライスは見つかりませんでした。")
-    
+
+        # GUI プレビューへ送出 (preview_cases の順序で整える)
+        if preview_cb is not None and preview_key_set:
+            ordered = []
+            for pid, sl in preview_cases:
+                key = (str(pid), int(sl))
+                if key in preview_collected:
+                    ordered.append(preview_collected[key])
+            try:
+                preview_cb(epoch, ordered)
+            except Exception as e:
+                self._log(f"[preview_cb] error ignored: {e}")
+
         return EpochResult(loss=epoch_loss, seconds=sec, terms=avg_terms)
 
     def _save_pred_nii_3d(self, pred_3d_zhw: np.ndarray, save_path: str):
@@ -729,25 +787,53 @@ class Trainer:
     
         return {"done": True, "n_ids": len(buffers)}
 
-    def fit(self, train_loader, val_loader):
+    def fit(
+        self,
+        train_loader,
+        val_loader,
+        progress_cb: Optional[Callable[[dict], None]] = None,
+        stop_check: Optional[Callable[[], bool]] = None,
+        preview_cb: Optional[Callable[[int, List[dict]], None]] = None,
+        preview_cases: Optional[List[Tuple[str, int]]] = None,
+    ):
+        """
+        学習ループ本体。
+
+        Args:
+            train_loader, val_loader : データローダ
+            progress_cb  : 各エポック終了時に dict で進捗情報を受け取るコールバック。
+                           GUI の進捗バー・ETA・loss 曲線・ベスト表示に使う。
+                           None で挙動変化なし (CLI)。
+            stop_check   : 各エポック後に呼び出される zero-arg コールバック。
+                           True を返すと finally を経由して学習を終了する。
+            preview_cb   : validate() 末尾で 3 ケース程度のプレビューを受け取る。
+            preview_cases: プレビュー対象 (ixi_id, slice) のリスト。
+        """
         epochs = int(self.cfg.get("train", {}).get("epochs", 50))
         save_every = int(self.cfg.get("train", {}).get("save_every", 1))
-    
+
         self._log(f"device: {self.device}")
         self._log(f"epochs: {epochs} | amp: {self.use_amp}")
         self._log(f"ckpt_dir: {self.ckpt_dir}")
-    
+
+        fit_start = time.time()
+
         try:
             for epoch in range(1, epochs + 1):
-    
+
                 self._log("")
                 self._log("=" * 60)
                 self._log(f"Epoch {epoch}/{epochs}")
                 self._log("=" * 60)
-    
+
                 tr = self.train(train_loader)
-                va = self.validate(val_loader, epoch)
-    
+                va = self.validate(
+                    val_loader,
+                    epoch,
+                    preview_cases=preview_cases,
+                    preview_cb=preview_cb,
+                )
+
                 # validation loss の内訳がある場合だけ一緒に表示
                 if hasattr(va, "terms") and isinstance(va.terms, dict) and len(va.terms) > 0:
                     terms_str = ", ".join(
@@ -766,17 +852,45 @@ class Trainer:
                         f"train_loss={tr.loss:.6f} ({tr.seconds:.1f}s) | "
                         f"val_loss={va.loss:.6f} ({va.seconds:.1f}s)"
                     )
-    
+
                 self._save_checkpoint("last", epoch)
-    
+
                 score = va.loss
-                if self._monitor_better(score):
+                is_best = self._monitor_better(score)
+                if is_best:
                     self.best_score = score
                     self._save_checkpoint("best", epoch)
                     self._log(f"✅ best updated: {self.best_score:.6f}")
-    
+
                 if save_every > 0 and (epoch % save_every == 0):
                     self._save_checkpoint(f"epoch_{epoch:03d}", epoch)
-    
+
+                # GUI 向け進捗コールバック
+                if progress_cb is not None:
+                    try:
+                        progress_cb({
+                            "epoch": epoch,
+                            "total_epochs": epochs,
+                            "train_loss": float(tr.loss),
+                            "val_loss": float(va.loss),
+                            "val_terms": dict(va.terms) if isinstance(va.terms, dict) else {},
+                            "train_seconds": float(tr.seconds),
+                            "val_seconds": float(va.seconds),
+                            "elapsed_seconds": float(time.time() - fit_start),
+                            "best_loss": (float(self.best_score) if self.best_score is not None else None),
+                            "is_best": bool(is_best),
+                        })
+                    except Exception as e:
+                        self._log(f"[progress_cb] error ignored: {e}")
+
+                # 停止要求 (GUI の Stop ボタン)
+                if stop_check is not None:
+                    try:
+                        if stop_check():
+                            self._log("学習停止が要求されました。現在のエポック終了時点で中断します。")
+                            break
+                    except Exception as e:
+                        self._log(f"[stop_check] error ignored: {e}")
+
         finally:
             self._save_training_artifacts()

@@ -146,9 +146,10 @@ def run_train(
     cfg: Dict[str, Any],
     logger,
     ckpt_dir: str,
-    progress_cb: Optional[Callable[..., None]] = None,
+    progress_cb: Optional[Callable[[Dict[str, Any]], None]] = None,
     stop_check: Optional[Callable[[], bool]] = None,
-    preview_cb: Optional[Callable[..., None]] = None,
+    preview_cb: Optional[Callable[[int, list], None]] = None,
+    preview_cases: Optional[list] = None,
 ) -> None:
     """
     Run a full training pass.
@@ -158,19 +159,19 @@ def run_train(
         logger: already-configured logger
         ckpt_dir: target directory for checkpoints (typically from
                   prepare_output_dirs)
-        progress_cb: optional callable invoked by the trainer with per-epoch
-                     progress info. Shape of the call is defined by the
-                     Trainer; CLI passes None.
+        progress_cb: optional callable invoked at each epoch end with a dict
+                     containing epoch / train_loss / val_loss / elapsed_seconds
+                     / best_loss / is_best. Used by the GUI for live progress,
+                     ETA and loss curve. CLI passes None.
         stop_check: optional zero-arg callable; if it returns True the trainer
-                    should wind down the loop.
-        preview_cb: optional callable that receives a small bundle of
-                    (T1, T2, pred, gt) arrays per val case at the end of
-                    each epoch for GUI preview.
+                    finishes the current epoch and then stops cleanly.
+        preview_cb: optional callable(epoch, samples) where each sample is a
+                    dict of t1/t2/pred/gt numpy arrays plus pid/slice labels.
+                    Called once per epoch for GUI sample-prediction preview.
+        preview_cases: list of (ixi_id: str, slice: int) tuples. Only these
+                       val samples are captured for preview_cb.
 
-    Note:
-        The callbacks are plumbed through for GUI use. Wiring them to the
-        Trainer internals is the job of a separate change in engine/trainer.py;
-        passing None preserves current behaviour.
+    Behavior when all callbacks are None is identical to the prior CLI flow.
     """
     data_cfg = cfg.get("data", {})
     train_csv = data_cfg.get("train_csv", None)
@@ -203,7 +204,14 @@ def run_train(
         logger=logger,
         ckpt_dir=ckpt_dir,
     )
-    trainer.fit(train_loader, val_loader)
+    trainer.fit(
+        train_loader,
+        val_loader,
+        progress_cb=progress_cb,
+        stop_check=stop_check,
+        preview_cb=preview_cb,
+        preview_cases=preview_cases,
+    )
 
 
 def run_eval(
