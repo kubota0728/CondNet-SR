@@ -358,7 +358,20 @@ class Trainer:
     # ----------------------------
     # loops
     # ----------------------------
-    def train(self, train_loader) -> EpochResult:
+    def train(
+        self,
+        train_loader,
+        epoch: Optional[int] = None,
+        total_epochs: Optional[int] = None,
+        batch_cb: Optional[Callable[[dict], None]] = None,
+    ) -> EpochResult:
+        """
+        1 エポック分の学習ループ。
+
+        Args:
+            epoch, total_epochs : GUI 表示用。batch_cb に渡すために受け取る。
+            batch_cb : 各バッチ終了時に dict を受け取る。None で挙動変化なし。
+        """
         t0 = time.time()
         self._set_train_mode()
         self._maybe_fix_frozen_transformers()
@@ -366,9 +379,11 @@ class Trainer:
         running = 0.0
         n_batches = 0
 
+        total_batches = len(train_loader)
+
         log_every = self.log_every
         if log_every <= 0:
-            log_every = max(1, len(train_loader) // 10)
+            log_every = max(1, total_batches // 10)
 
         autocast_enabled = self.use_amp and (self.device.type == "cuda")
 
@@ -398,11 +413,26 @@ class Trainer:
                 loss.backward()
                 self._optimizer_step()
 
-            running += float(loss.item())
+            batch_loss = float(loss.item())
+            running += batch_loss
             n_batches += 1
 
             if i % log_every == 0:
-                self._log(f"[train] iter {i}/{len(train_loader)} | loss={running/n_batches:.6f}")
+                self._log(f"[train] iter {i}/{total_batches} | loss={running/n_batches:.6f}")
+
+            # GUI バッチ進捗コールバック
+            if batch_cb is not None:
+                try:
+                    batch_cb({
+                        "epoch": int(epoch) if epoch is not None else 0,
+                        "total_epochs": int(total_epochs) if total_epochs is not None else 0,
+                        "batch": int(i),
+                        "total_batches": int(total_batches),
+                        "batch_loss": batch_loss,
+                        "running_loss": running / n_batches,
+                    })
+                except Exception as e:
+                    self._log(f"[batch_cb] error ignored: {e}")
 
         epoch_loss = running / max(1, n_batches)
         sec = time.time() - t0
@@ -795,6 +825,7 @@ class Trainer:
         stop_check: Optional[Callable[[], bool]] = None,
         preview_cb: Optional[Callable[[int, List[dict]], None]] = None,
         preview_cases: Optional[List[Tuple[str, int]]] = None,
+        batch_cb: Optional[Callable[[dict], None]] = None,
     ):
         """
         学習ループ本体。
@@ -826,7 +857,12 @@ class Trainer:
                 self._log(f"Epoch {epoch}/{epochs}")
                 self._log("=" * 60)
 
-                tr = self.train(train_loader)
+                tr = self.train(
+                    train_loader,
+                    epoch=epoch,
+                    total_epochs=epochs,
+                    batch_cb=batch_cb,
+                )
                 va = self.validate(
                     val_loader,
                     epoch,
