@@ -64,3 +64,6 @@ Thumbs.db
 gui/
 gui_state.json
 .claude/
+# GUI 作成途中のスクショなど
+cap*.png
+cap*.PNG
