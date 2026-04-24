@@ -744,25 +744,59 @@ class Trainer:
         
 
     @torch.no_grad()
-    def eval(self, loader, save_predictions=False, pred_dir=None):
+    def eval(
+        self,
+        loader,
+        save_predictions: bool = False,
+        pred_dir: Optional[str] = None,
+        progress_cb: Optional[Callable[[dict], None]] = None,
+        case_cb: Optional[Callable[[dict], None]] = None,
+        done_cb: Optional[Callable[[dict], None]] = None,
+        stop_check: Optional[Callable[[], bool]] = None,
+        pause_check: Optional[Callable[[], bool]] = None,
+    ):
+        """
+        Args:
+            progress_cb : 各バッチ終了時に dict を受け取る。GUI の進捗バー用。
+            case_cb     : 1 症例が 3D 化した直後に {pid, t1, t2, pred, gt, lab14, mae_all}
+                          を受け取る。GUI の症例ビューア用。
+            done_cb     : 全症例集計後に {global_mae, per_label, n_ids} を受け取る。
+            stop_check  : True を返すとバッチループを抜け、そこまでの結果で集計する。
 
+            case_cb が None のとき (CLI) は既存と同じく plt.show で中央スライスを表示する。
+            case_cb が渡されていれば GUI 側で描画するので popup は呼ばない。
+        """
         SCALE_BACK = 2.0 / 0.9
-    
+
         self._set_eval_mode()
         self._maybe_fix_frozen_transformers()
-    
+
         if save_predictions:
             if pred_dir is None:
                 pred_dir = os.path.join(self.ckpt_dir, "predictions_nii")
             os.makedirs(pred_dir, exist_ok=True)
-    
+
         # buffers[pid] = list of (slice, t1, t2, gt, pred, lab14)
         buffers = {}
-    
-        for idx, batch in enumerate(loader):
+
+        total_batches = len(loader)
+
+        for idx, batch in enumerate(loader, start=1):
+            # pause handling (train/validate と同じ)
+            if pause_check is not None and pause_check():
+                self._log(f"[pause] at eval iter {idx}")
+                while pause_check():
+                    if stop_check is not None and stop_check():
+                        break
+                    time.sleep(0.1)
+                self._log("[resume]")
+
+            if stop_check is not None and stop_check():
+                break
+
             batch = self._to_device(batch)
             self._require_keys(batch, ["img1", "img2", "mask", "label", "lab14", "ixi_id", "slice"])
-    
+
             img1 = batch["img1"]
             img2 = batch["img2"]
             mask = batch["mask"]
@@ -770,71 +804,97 @@ class Trainer:
             lab14 = batch["lab14"]  # (B,H,W)
             ixi_ids = batch["ixi_id"]
             slices  = batch["slice"]
-    
+
             pred, _ = self._forward(img1, img2, mask)  # (B,1,H,W)
-    
+
             B = int(pred.shape[0])
-    
+
             # ixi_ids, slices を list 化（collate対策）
             if not isinstance(ixi_ids, (list, tuple)):
                 ixi_ids = list(ixi_ids)
             if not isinstance(slices, (list, tuple)):
                 slices = list(slices)
-    
+
             for i in range(B):
                 pid = str(ixi_ids[i])
                 s   = int(slices[i])
-    
+
                 t1_2d = img1[i, 0].detach().cpu().numpy()
                 t2_2d = img2[i, 0].detach().cpu().numpy()
-    
+
                 # ★導電率スケール復元（pred/gtともに）
                 gt_2d = gt[i, 0].detach().cpu().numpy().astype(np.float32) * SCALE_BACK
                 pr_2d = pred[i, 0].detach().cpu().numpy().astype(np.float32) * SCALE_BACK
-    
+
                 lb_2d = lab14[i].detach().cpu().numpy().astype(np.int16)
-    
+
                 buffers.setdefault(pid, []).append((s, t1_2d, t2_2d, gt_2d, pr_2d, lb_2d))
-    
+
+            if progress_cb is not None:
+                try:
+                    progress_cb({
+                        "batch": int(idx),
+                        "total_batches": int(total_batches),
+                    })
+                except Exception as e:
+                    self._log(f"[progress_cb/eval] error ignored: {e}")
+
         # ===== 全症例集約用（ラベル別 mean/std/MAE、全体MAE） =====
         global_acc = {r: {"n": 0, "sum": 0.0, "sumsq": 0.0, "abs_err": 0.0} for r in range(1, 15)}
         global_all = {"n": 0, "abs_err": 0.0}
-    
+
         # ★IDごとに処理
         for pid, items in buffers.items():
             items.sort(key=lambda x: x[0])  # slice順に並べる
             n_slices = len(items)
             self._log(f"[eval] IXI_ID={pid} | slices={n_slices}")
-    
+
             # stackして3D化: (Z,H,W)
             t1_zhw = np.stack([x[1] for x in items], axis=0).astype(np.float32)
             t2_zhw = np.stack([x[2] for x in items], axis=0).astype(np.float32)
             gt_zhw = np.stack([x[3] for x in items], axis=0).astype(np.float32)
             pr_zhw = np.stack([x[4] for x in items], axis=0).astype(np.float32)
             lb_zhw = np.stack([x[5] for x in items], axis=0).astype(np.int16)
-    
+
             # ---- 症例ごとのログは必要最小限（細かい出力はしない） ----
             m_all = (lb_zhw >= 1) & (lb_zhw <= 14)
             if m_all.any():
                 mae_case_all = float(np.mean(np.abs(pr_zhw[m_all] - gt_zhw[m_all])))
                 self._log(f"  MAE_all={mae_case_all:.5f}")
             else:
+                mae_case_all = float("nan")
                 self._log("  MAE_all=nan")
-    
-            # ---- z//2の断面を表示（保存しない） ----
-            self._show_mid_slice(t1_zhw, t2_zhw, gt_zhw, pr_zhw, pid)
-    
+
+            # ---- GUI へ症例データを送出 (3D 配列をそのまま渡す) ----
+            if case_cb is not None:
+                try:
+                    case_cb({
+                        "pid": pid,
+                        "t1":    t1_zhw,
+                        "t2":    t2_zhw,
+                        "pred":  pr_zhw,
+                        "gt":    gt_zhw,
+                        "lab14": lb_zhw,
+                        "mae_all": float(mae_case_all),
+                        "n_slices": int(n_slices),
+                    })
+                except Exception as e:
+                    self._log(f"[case_cb] error ignored: {e}")
+            else:
+                # ---- CLI のみ: z//2 の断面を popup 表示 (既存挙動) ----
+                self._show_mid_slice(t1_zhw, t2_zhw, gt_zhw, pr_zhw, pid)
+
             # ---- predのみnii保存（症例1ファイル） ----
             if save_predictions:
                 save_path = os.path.join(pred_dir, f"{pid}_pred.nii.gz")
                 self._save_pred_nii_3d(pr_zhw, save_path)
-    
+
             # ---- 全症例集約（label別 mean/std/MAE と 全体MAE）----
             if m_all.any():
                 ae = np.abs(pr_zhw[m_all] - gt_zhw[m_all])
                 global_all["n"] += int(ae.size)
                 global_all["abs_err"] += float(ae.sum())
-    
+
             for r in range(1, 15):
                 m = (lb_zhw == r)
                 if not m.any():
@@ -846,14 +906,16 @@ class Trainer:
                 global_acc[r]["sum"] += float(pv.sum())
                 global_acc[r]["sumsq"] += float((pv * pv).sum())
                 global_acc[r]["abs_err"] += float(np.abs(pv - gv).sum())
-    
+
         # ===== 全症例での最終出力（小数点第5位まで） =====
         if global_all["n"] > 0:
-            mae_all = global_all["abs_err"] / global_all["n"]
-            self._log(f"[eval] GLOBAL | MAE_all={mae_all:.5f}")
+            global_mae = global_all["abs_err"] / global_all["n"]
+            self._log(f"[eval] GLOBAL | MAE_all={global_mae:.5f}")
         else:
+            global_mae = float("nan")
             self._log("[eval] GLOBAL | MAE_all=nan")
-    
+
+        per_label: Dict[int, Dict[str, float]] = {}
         for r in range(1, 15):
             n = global_acc[r]["n"]
             if n == 0:
@@ -865,8 +927,27 @@ class Trainer:
             std = float(np.sqrt(var))
             mae = global_acc[r]["abs_err"] / n
             self._log(f"[eval] GLOBAL | Label: {r:02d} | MAE: {mae:.5f} | mean±SD: {mean:.5f}±{std:.5f}")
-    
-        return {"done": True, "n_ids": len(buffers)}
+            per_label[r] = {
+                "mae":  float(mae),
+                "mean": float(mean),
+                "std":  float(std),
+                "n":    int(n),
+            }
+
+        result = {
+            "done": True,
+            "n_ids": len(buffers),
+            "global_mae": float(global_mae),
+            "per_label": per_label,
+        }
+
+        if done_cb is not None:
+            try:
+                done_cb(dict(result))
+            except Exception as e:
+                self._log(f"[done_cb] error ignored: {e}")
+
+        return result
 
     def fit(
         self,

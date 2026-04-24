@@ -222,8 +222,12 @@ def run_eval(
     cfg: Dict[str, Any],
     logger,
     ckpt_dir: str,
-    progress_cb: Optional[Callable[..., None]] = None,
-) -> None:
+    progress_cb: Optional[Callable[[Dict[str, Any]], None]] = None,
+    case_cb: Optional[Callable[[Dict[str, Any]], None]] = None,
+    done_cb: Optional[Callable[[Dict[str, Any]], None]] = None,
+    stop_check: Optional[Callable[[], bool]] = None,
+    pause_check: Optional[Callable[[], bool]] = None,
+) -> Dict[str, Any]:
     """
     Run an eval / test / predict pass.
 
@@ -233,6 +237,14 @@ def run_eval(
         ckpt_dir: working directory for this run (used e.g. for logs)
         progress_cb: optional callable invoked with per-batch progress info
                      when GUI needs a progress bar. CLI passes None.
+        case_cb    : optional callable invoked after each case has been
+                     assembled into a 3D volume. Used by the GUI viewer.
+        done_cb    : optional callable invoked once after global aggregation.
+        stop_check : optional zero-arg callable; True aborts the batch loop.
+
+    Returns:
+        dict with keys: done, n_ids, global_mae, per_label.
+        CLI may ignore the return value.
     """
     mode = str(cfg.get("run", {}).get("mode", "eval")).lower()
 
@@ -270,4 +282,13 @@ def run_eval(
     save_pred = bool(cfg.get("eval", {}).get("save_predictions", False))
     pred_dir = cfg.get("eval", {}).get("pred_dir", None)
 
-    trainer.eval(eval_loader, save_predictions=save_pred, pred_dir=pred_dir)
+    return trainer.eval(
+        eval_loader,
+        save_predictions=save_pred,
+        pred_dir=pred_dir,
+        progress_cb=progress_cb,
+        case_cb=case_cb,
+        done_cb=done_cb,
+        stop_check=stop_check,
+        pause_check=pause_check,
+    )
