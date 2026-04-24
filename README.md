@@ -174,7 +174,7 @@ Key fields:
 | `model.pretrained_unet_path` | **Required**. Path to `best.pth` from Step 2 |
 | `model.freeze_keywords` | Backbone modules frozen during transfer (default: TCB1-5, Trans) |
 | `model.multi_model` | `true`: original + ctnet separately; `false`: single model |
-| `loss.name` | `mae` / `logmae` / `condnet_cs` (SR loss) |
+| `loss.name` | `mae` / `logmae` / `condnet_sr` (SR loss) |
 | `loss.lambda_stat`, `lambda_rank`, `lambda_smooth` | SR loss weights |
 
 ---

@@ -37,9 +37,9 @@ class MixedLogMAELoss(nn.Module):
         return self.w_mae * mae + self.w_log * logmae
 
 
-class CondNetCSLoss(nn.Module):
+class CondNetSRLoss(nn.Module):
     """
-    CondNet-CS loss for 2D slice training.
+    CondNet-SR loss (Statistical-Rank) for 2D slice training.
 
     必要な batch:
         batch["img1"]   : T1,   [B,1,H,W] or [B,H,W]
@@ -105,7 +105,7 @@ class CondNetCSLoss(nn.Module):
 
     def forward(self, pred, target, batch=None):
         if batch is None:
-            raise ValueError("CondNetCSLoss requires batch.")
+            raise ValueError("CondNetSRLoss requires batch.")
         if "lab14" not in batch:
             raise ValueError("batch['lab14'] is required.")
         if "img1" not in batch or "img2" not in batch:
@@ -344,9 +344,9 @@ def build_loss(cfg):
     if name == "logmae":
         return MixedLogMAELoss()
 
-    if name == "condnet_cs":
+    if name == "condnet_sr":
         loss_cfg = cfg.get("loss", {})
-        return CondNetCSLoss(
+        return CondNetSRLoss(
             lambda_stat=loss_cfg.get("lambda_stat", 1.0),
             lambda_rank=loss_cfg.get("lambda_rank", 0.2),
             lambda_smooth=loss_cfg.get("lambda_smooth", 0.01),
